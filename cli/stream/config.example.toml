@@ -1,0 +1,102 @@
+# Example configuration for the `stream` CLI.
+# Copy this file to ~/.config/stream/config.toml and customize the values.
+
+default_profile = "main"
+
+[profiles.main]
+description = "Primary monitor streamed over SRT to ffmpeg on the Linux ingest box."
+
+[profiles.main.remote]
+host = "stream-box.local"
+user = "stream"
+port = 22
+tmux_session = "streamd"
+ingest_port = 6000
+packet_size = 1316
+log_path = "/home/stream/logs/streamd.log"
+
+[profiles.main.remote.runner]
+type = "ffmpeg"
+output = "/home/stream/recordings/current.ts"
+format = "mpegts"
+copy_video = true
+copy_audio = true
+extra_args = ["-map", "0:v:0", "-map", "0:a?", "-flush_packets", "1"]
+
+[profiles.main.local]
+ffmpeg_path = "/opt/homebrew/bin/ffmpeg"
+fps = 60
+video_bitrate = "9000k"
+maxrate = "9000k"
+bufsize = "18000k"
+audio_bitrate = "192k"
+scale_filter = "scale=-2:1440:flags=lanczos"
+filters = ["format=yuv420p"]
+extra_args = ["-vsync", "1", "-color_range", "pc"]
+
+[profiles.main.local.capture]
+type = "avfoundation"
+video_device = "1"
+audio_device = "0"
+pixel_format = "uyvy422"
+capture_cursor = true
+capture_clicks = true
+thread_queue_size = 4096
+
+[profiles.main.local.encoder]
+type = "h264_videotoolbox"
+quality = "Quality"
+allow_sw = false
+
+[profiles.main.local.transport]
+type = "srt"
+latency_ms = 20
+packet_size = 1316
+
+[profiles.obs]
+description = "Headless OBS on the remote server (must reference an SRT media source listening on the same ingest_port)."
+
+[profiles.obs.remote]
+host = "stream-box.local"
+user = "stream"
+tmux_session = "stream-obs"
+ingest_port = 6000
+packet_size = 1316
+
+[profiles.obs.remote.runner]
+type = "headless_obs"
+binary = "/usr/bin/obs"
+profile = "Headless"
+scene_collection = "SRT"
+xvfb = true
+extra_args = ["--websocket_port", "59650"]
+
+[profiles.obs.remote.runner.env]
+OBS_USE_EGL = "1"
+
+[profiles.obs.local]
+ffmpeg_path = "/opt/homebrew/bin/ffmpeg"
+fps = 60
+video_bitrate = "12000k"
+maxrate = "12000k"
+bufsize = "24000k"
+scale_filter = "scale=-2:2160:flags=lanczos"
+filters = ["format=yuv420p"]
+
+[profiles.obs.local.capture]
+type = "avfoundation"
+video_device = "1"
+audio_device = "none"
+pixel_format = "uyvy422"
+capture_cursor = false
+capture_clicks = false
+
+[profiles.obs.local.encoder]
+type = "hevc_videotoolbox"
+quality = "Quality"
+allow_sw = false
+
+[profiles.obs.local.transport]
+type = "srt"
+latency_ms = 30
+packet_size = 1316

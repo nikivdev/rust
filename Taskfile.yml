@@ -31,9 +31,11 @@ tasks:
         export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
         mkdir -p "$CARGO_HOME"
         mkdir -p "$CARGO_TARGET_DIR"
-        if ! cargo fetch --manifest-path "$repo_root/cli/flow/Cargo.toml" >/dev/null; then
-          echo "Warning: unable to download Cargo dependencies; try again once network access is available."
-        fi
+        for manifest in "$repo_root/cli/flow/Cargo.toml" "$repo_root/cli/index/Cargo.toml" "$repo_root/cli/code/Cargo.toml"; do
+          if ! cargo fetch --manifest-path "$manifest" >/dev/null; then
+            echo "Warning: unable to download Cargo dependencies for $manifest; try again once network access is available."
+          fi
+        done
         echo "you are setup"
 
   flow:
@@ -48,6 +50,19 @@ tasks:
         mkdir -p "$CARGO_HOME"
         mkdir -p "$CARGO_TARGET_DIR"
         cargo run --manifest-path "$repo_root/cli/flow/Cargo.toml"{{if .CLI_ARGS}} -- {{.CLI_ARGS}}{{end}}
+
+  index:
+    desc: Run the Index CLI (passes CLI args through).
+    silent: true
+    cmds:
+      - |
+        set -euo pipefail
+        repo_root="$PWD"
+        export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+        export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+        mkdir -p "$CARGO_HOME"
+        mkdir -p "$CARGO_TARGET_DIR"
+        cargo run --manifest-path "$repo_root/cli/index/Cargo.toml"{{if .CLI_ARGS}} -- {{.CLI_ARGS}}{{end}}
 
   dev:
     desc: Alias for `task flow`.
@@ -91,3 +106,29 @@ tasks:
         mkdir -p "{{.bin_dir}}"
         install -m 755 "{{.ghostty_switch_dir}}/{{.ghostty_switch_name}}" "{{.bin_dir}}/{{.ghostty_switch_name}}"
         echo "Installed ghostty-switch to {{.bin_dir}}/{{.ghostty_switch_name}}"
+
+  stream:
+    desc: Run the Stream CLI (passes CLI args through).
+    silent: true
+    cmds:
+      - |
+        set -euo pipefail
+        repo_root="$PWD"
+        export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+        export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+        mkdir -p "$CARGO_HOME"
+        mkdir -p "$CARGO_TARGET_DIR"
+        cargo run --manifest-path "$repo_root/cli/stream/Cargo.toml"{{if .CLI_ARGS}} -- {{.CLI_ARGS}}{{end}}
+
+  code:
+    desc: Run the Code CLI (passes CLI args through).
+    silent: true
+    cmds:
+      - |
+        set -euo pipefail
+        repo_root="$PWD"
+        export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+        export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+        mkdir -p "$CARGO_HOME"
+        mkdir -p "$CARGO_TARGET_DIR"
+        cargo run --manifest-path "$repo_root/cli/code/Cargo.toml"{{if .CLI_ARGS}} -- {{.CLI_ARGS}}{{end}}
