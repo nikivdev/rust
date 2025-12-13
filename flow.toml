@@ -1,0 +1,418 @@
+version = 1
+name = "rust"
+
+[[tasks]]
+name = "default"
+command = """
+cat <<'EOF'
+Available tasks:
+- setup                  Ensure Cargo is installed and download Flow CLI dependencies.
+- flow [args...]         Run the Flow CLI (passes CLI args through).
+- index [args...]        Run the Index CLI (passes CLI args through).
+- dev [args...]          Alias for flow.
+- run [args...]          Alias for flow.
+- deploy                 Build the Flow CLI binary and install it to ~/bin/flow-rs.
+- deploy-ghostty-switch  Install the ghostty-switch helper to ~/bin.
+- stream [args...]       Run the Stream CLI (passes CLI args through).
+- code [args...]         Run the Code CLI (passes CLI args through).
+- try [args...]          Run the Try CLI (passes CLI args through).
+- try-build              Build the Try CLI binary (dev profile).
+- deploy-frs             Build the Flow CLI binary and install it to ~/bin/frs.
+- claude [args...]       Run the Claude CLI (passes CLI args through).
+- deploy-claude          Build the Claude CLI binary and install it to ~/bin/claude-rs.
+- macos [args...]        Run the macOS CLI (passes CLI args through).
+- deploy-macos           Build the macOS CLI binary and install it to ~/bin/macos.
+- km [args...]           Run the Keyboard Maestro CLI (passes CLI args through).
+- deploy-km              Build the Keyboard Maestro CLI binary and install it to ~/bin/km.
+- karabiner [args...]    Run the Karabiner CLI (passes CLI args through).
+- deploy-karabiner       Build the Karabiner CLI binary and install it to ~/bin/karabiner.
+- ctx [args...]          Run the Context CLI (passes CLI args through).
+- deploy-ctx             Build the Context CLI binary and install it to ~/bin/ctx.
+- deploy-personal-mcp    Build the personal MCP server and install it to ~/bin/personal-mcp.
+EOF
+"""
+description = "List available tasks."
+
+[[tasks]]
+name = "setup"
+command = """
+set -euo pipefail
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "Rust toolchain 'cargo' not found in PATH."
+  echo "Install it via https://www.rust-lang.org/tools/install"
+  exit 1
+fi
+cargo --version >/dev/null
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+for manifest in "$repo_root/cli/flow/Cargo.toml" "$repo_root/cli/index/Cargo.toml" "$repo_root/cli/code/Cargo.toml" "$repo_root/cli/stream/Cargo.toml" "$repo_root/cli/try/Cargo.toml"; do
+  if ! cargo fetch --manifest-path "$manifest" >/dev/null; then
+    echo "Warning: unable to download Cargo dependencies for $manifest; try again once network access is available."
+  fi
+done
+echo "you are setup"
+"""
+description = "Ensure Cargo is installed and download Flow CLI dependencies."
+
+[[tasks]]
+name = "flow"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/flow/Cargo.toml" -- "$@"
+"""
+description = "Run the Flow CLI (passes CLI args through)."
+
+[[tasks]]
+name = "index"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/index/Cargo.toml" -- "$@"
+"""
+description = "Run the Index CLI (passes CLI args through)."
+
+[[tasks]]
+name = "dev"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/flow/Cargo.toml" -- "$@"
+"""
+description = "Alias for flow."
+
+[[tasks]]
+name = "run"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/flow/Cargo.toml" -- "$@"
+"""
+description = "Alias for flow."
+
+[[tasks]]
+name = "deploy"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="flow"
+bin_name="flow-rs"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/flow/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Flow CLI binary and install it to ~/bin/flow-rs."
+
+[[tasks]]
+name = "deploy-ghostty-switch"
+command = """
+set -euo pipefail
+bin_dir="$HOME/bin"
+ghostty_switch_name="ghostty-switch"
+ghostty_switch_dir="$HOME/config/sh"
+mkdir -p "$bin_dir"
+install -m 755 "$ghostty_switch_dir/$ghostty_switch_name" "$bin_dir/$ghostty_switch_name"
+echo "Installed ghostty-switch to $bin_dir/$ghostty_switch_name"
+"""
+description = "Install the ghostty-switch helper script to ~/bin/ghostty-switch."
+
+[[tasks]]
+name = "stream"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/stream/Cargo.toml" -- "$@"
+"""
+description = "Run the Stream CLI (passes CLI args through)."
+
+[[tasks]]
+name = "code"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/code/Cargo.toml" -- "$@"
+"""
+description = "Run the Code CLI (passes CLI args through)."
+
+[[tasks]]
+name = "try"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/try/Cargo.toml" -- "$@"
+"""
+description = "Run the Try CLI (passes CLI args through)."
+
+[[tasks]]
+name = "try-build"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo build --manifest-path "$repo_root/cli/try/Cargo.toml"
+"""
+description = "Build the Try CLI binary (dev profile)."
+
+[[tasks]]
+name = "deploy-frs"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="flow"
+bin_name="frs"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/flow/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+xattr -c "$bin_dir/$bin_name"
+codesign -s - "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Flow CLI binary and install it to ~/bin/frs."
+
+[[tasks]]
+name = "claude"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/claude/Cargo.toml" -- "$@"
+"""
+description = "Run the Claude CLI (passes CLI args through)."
+
+[[tasks]]
+name = "deploy-claude"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="claude-rs"
+bin_name="claude-rs"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/claude/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Claude CLI binary and install it to ~/bin/claude-rs."
+
+[[tasks]]
+name = "macos"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/macos/Cargo.toml" -- "$@"
+"""
+description = "Run the macOS CLI (passes CLI args through)."
+
+[[tasks]]
+name = "deploy-macos"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="macos"
+bin_name="macos"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/macos/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the macOS CLI binary and install it to ~/bin/macos."
+
+[[tasks]]
+name = "km"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/km/Cargo.toml" -- "$@"
+"""
+description = "Run the Keyboard Maestro CLI (passes CLI args through)."
+
+[[tasks]]
+name = "deploy-km"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="km"
+bin_name="km"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/km/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Keyboard Maestro CLI binary and install it to ~/bin/km."
+
+[[tasks]]
+name = "karabiner"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/karabiner/Cargo.toml" -- "$@"
+"""
+description = "Run the Karabiner CLI (passes CLI args through)."
+
+[[tasks]]
+name = "deploy-karabiner"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="karabiner"
+bin_name="karabiner"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/karabiner/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Karabiner CLI binary and install it to ~/bin/karabiner."
+
+[[tasks]]
+name = "ctx"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/ctx/Cargo.toml" -- "$@"
+"""
+description = "Run the Context CLI (passes CLI args through)."
+
+[[tasks]]
+name = "deploy-ctx"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="ctx"
+bin_name="ctx"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/ctx/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Context CLI binary and install it to ~/bin/ctx."
+
+[[tasks]]
+name = "deploy-personal-mcp"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="personal-mcp"
+bin_name="personal-mcp"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/personal-mcp/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the personal MCP server and install it to ~/bin/personal-mcp."

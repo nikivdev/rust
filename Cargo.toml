@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "cli/flow",
+    "cli/index",
+    "cli/stream",
+    "cli/code",
+    "cli/try",
+    "cli/claude",
+    "cli/macos",
+    "cli/km",
+    "cli/karabiner",
+    "cli/new",
+    "cli/ctx",
+    "cli/personal-mcp",
+    "lib/linsa",
+    # "lib/lin-rs",  # requires local outlines-core fork
+]
+resolver = "2"
