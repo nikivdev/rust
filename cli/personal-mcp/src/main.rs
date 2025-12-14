@@ -2,12 +2,10 @@ use std::process::Command;
 
 use anyhow::Result;
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler,
+    ErrorData as McpError, ServerHandler,
     handler::server::wrapper::Parameters,
     model::*,
     schemars, tool, tool_router, tool_handler,
-    transport::stdio,
-    service::RequestContext,
     ServiceExt,
 };
 use tracing_subscriber::EnvFilter;
@@ -24,6 +22,7 @@ pub struct KmBindArgs {
 
 #[derive(Clone)]
 pub struct PersonalMcp {
+    #[allow(dead_code)]
     tool_router: rmcp::handler::server::router::tool::ToolRouter<PersonalMcp>,
 }
 
@@ -35,9 +34,7 @@ impl PersonalMcp {
         }
     }
 
-    /// Create a Keyboard Maestro binding to open an app at a specific path.
-    /// Use this when asked to "make km bind for X" or "create keyboard maestro shortcut".
-    #[tool(description = "Create a Keyboard Maestro binding to open an app at a specific path. Example: create km bind 'zed: codex' to open Zed at ~/fork-i/openai/codex")]
+    #[tool(description = "Create a Keyboard Maestro binding to open an app at a specific path")]
     fn km_create_open(
         &self,
         Parameters(args): Parameters<KmBindArgs>,
@@ -76,25 +73,13 @@ impl PersonalMcp {
 impl ServerHandler for PersonalMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            protocol_version: ProtocolVersion::LATEST,
+            protocol_version: ProtocolVersion::V_2024_11_05,
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "Personal MCP server with tools for Keyboard Maestro bindings and more. \
-                Use km_create_open to create shortcuts that open apps at specific paths."
-                    .to_string(),
-            ),
+            instructions: None,
         }
-    }
-
-    async fn initialize(
-        &self,
-        _request: InitializeRequestParam,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<InitializeResult, McpError> {
-        Ok(self.get_info())
     }
 }
 
@@ -115,12 +100,8 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .init();
 
-    tracing::info!("Starting personal-mcp server");
-
-    let service = PersonalMcp::new().serve(stdio()).await.inspect_err(|e| {
-        tracing::error!("serving error: {:?}", e);
-    })?;
-
+    let io = (tokio::io::stdin(), tokio::io::stdout());
+    let service = PersonalMcp::new().serve(io).await?;
     service.waiting().await?;
     Ok(())
 }

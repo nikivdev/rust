@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", features = [
+rmcp = { path = "/Users/nikiv/fork-i/modelcontextprotocol/rust-sdk/crates/rmcp", features = [
     "server",
     "macros",
     "transport-io",

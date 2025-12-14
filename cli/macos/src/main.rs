@@ -19,6 +19,7 @@ fn try_main() -> Result<()> {
         Commands::Shortcuts { all } => list_shortcuts(all),
         Commands::Apps { limit } => list_apps(limit),
         Commands::ClipImg => clip_img(),
+        Commands::Energy { limit } => list_energy(limit),
     }
 }
 
@@ -48,6 +49,14 @@ enum Commands {
     /// Useful for pasting images into apps that only accept file paths
     /// (e.g., Claude Code in Zed).
     ClipImg,
+    /// List apps/processes consuming most energy (by CPU usage)
+    ///
+    /// Useful for finding battery drains on flights.
+    Energy {
+        /// Limit number of processes shown (default: 15)
+        #[arg(long, short)]
+        limit: Option<usize>,
+    },
 }
 
 fn list_shortcuts(show_all: bool) -> Result<()> {
@@ -806,5 +815,108 @@ return outPath
     }
 
     println!("{}", output_path);
+    Ok(())
+}
+
+// ============================================================================
+// Energy command
+// ============================================================================
+
+#[derive(Debug)]
+struct ProcessEnergy {
+    name: String,
+    pid: u32,
+    cpu_percent: f64,
+}
+
+fn list_energy(limit: Option<usize>) -> Result<()> {
+    let limit = limit.unwrap_or(15);
+
+    // Use top to get accurate CPU snapshot (samples for 1 second)
+    // -l 2 means 2 samples, second one has actual CPU averages
+    // -n 100 limits to top 100 processes
+    let output = Command::new("top")
+        .args(["-l", "2", "-n", "100", "-stats", "pid,cpu,command"])
+        .output()
+        .context("failed to run top")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("top command failed: {}", stderr);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Find the second "PID" header (start of second sample's process list)
+    // top -l 2 outputs two samples, the second one has accurate CPU %
+    let mut pid_headers = 0;
+    let mut start_idx = None;
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    for (i, line) in lines.iter().enumerate() {
+        // Header line contains both PID and CPU
+        if line.contains("PID") && line.contains("CPU") {
+            pid_headers += 1;
+            if pid_headers == 2 {
+                start_idx = Some(i + 1);
+                break;
+            }
+        }
+    }
+
+    // Fallback to first sample if only one found
+    let start = match start_idx {
+        Some(idx) => idx,
+        None if pid_headers == 1 => {
+            lines.iter().position(|l| l.contains("PID") && l.contains("CPU"))
+                .map(|i| i + 1)
+                .ok_or_else(|| anyhow::anyhow!("failed to parse top output"))?
+        }
+        None => anyhow::bail!("failed to parse top output (no PID headers found)"),
+    };
+
+    // Parse process lines until we hit a non-process line
+    let mut processes: Vec<ProcessEnergy> = Vec::new();
+    for line in &lines[start..] {
+        let line = line.trim();
+        // Stop at empty or summary lines
+        if line.is_empty() || line.starts_with("Processes:") {
+            break;
+        }
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3 {
+            if let (Ok(pid), Ok(cpu)) = (parts[0].parse::<u32>(), parts[1].parse::<f64>()) {
+                if cpu > 0.0 {
+                    processes.push(ProcessEnergy {
+                        name: parts[2..].join(" "),
+                        pid,
+                        cpu_percent: cpu,
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort by CPU descending
+    processes.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap());
+
+    if processes.is_empty() {
+        println!("No processes with significant CPU usage found.");
+        return Ok(());
+    }
+
+    let total = processes.len();
+    let processes: Vec<_> = processes.into_iter().take(limit).collect();
+
+    println!("Top energy consumers (showing {}/{}):\n", processes.len(), total);
+    println!("{:<8} {:>8}  {}", "PID", "CPU %", "PROCESS");
+    println!("{}", "-".repeat(50));
+
+    for p in &processes {
+        println!("{:<8} {:>7.1}%  {}", p.pid, p.cpu_percent, p.name);
+    }
+
+    println!("\nTip: Use `kill <PID>` or quit apps to save battery.");
     Ok(())
 }
