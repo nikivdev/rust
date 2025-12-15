@@ -1,0 +1,40 @@
+[package]
+name = "ax"
+version = "0.1.0"
+edition = "2024"
+description = "macOS accessibility tree navigation and computer use training"
+license = "MIT"
+
+[dependencies]
+# macOS accessibility API
+accessibility = "0.1"
+accessibility-sys = "0.1"
+
+# JSON serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# CLI
+clap = { version = "4.0", features = ["derive"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Core Foundation for macOS - match accessibility crate version
+core-foundation = "0.9"
+core-foundation-sys = "0.8"
+core-graphics = "0.23"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Colored output
+colored = "3"
+
+# Mouse/keyboard control
+enigo = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.25"
+objc = "0.2"

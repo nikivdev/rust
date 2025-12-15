@@ -29,6 +29,8 @@ Available tasks:
 - ctx [args...]          Run the Context CLI (passes CLI args through).
 - deploy-ctx             Build the Context CLI binary and install it to ~/bin/ctx.
 - deploy-personal-mcp    Build the personal MCP server and install it to ~/bin/personal-mcp.
+- ax [args...]           Run the Accessibility CLI (passes CLI args through).
+- deploy-ax              Build the Accessibility CLI binary and install it to ~/bin/ax.
 EOF
 """
 description = "List available tasks."
@@ -416,3 +418,38 @@ chmod 755 "$bin_dir/$bin_name"
 echo "Installed CLI to $bin_dir/$bin_name"
 """
 description = "Build the personal MCP server and install it to ~/bin/personal-mcp."
+
+[[tasks]]
+name = "ax"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/ax/Cargo.toml" -- "$@"
+"""
+description = "Run the Accessibility CLI (passes CLI args through)."
+
+[[tasks]]
+name = "deploy-ax"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="ax"
+bin_name="ax"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/ax/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Accessibility CLI binary and install it to ~/bin/ax."

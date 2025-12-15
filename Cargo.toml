@@ -12,6 +12,7 @@ members = [
     "cli/new",
     "cli/ctx",
     "cli/personal-mcp",
+    "cli/ax",
     "lib/linsa",
     # "lib/lin-rs",  # requires local outlines-core fork
 ]
