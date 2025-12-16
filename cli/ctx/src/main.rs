@@ -19,11 +19,11 @@ fn try_main() -> Result<()> {
 
     match cli.command {
         Some(Commands::Gather { path, task, max_size, output, optimized }) => gather_context(&path, &task, max_size, output.as_deref(), optimized),
-        Some(Commands::Pack { path, output, max_size }) => pack_context(&path, output.as_deref(), max_size, false),
+        Some(Commands::Pack { path, output, max_size, optimized }) => pack_context(&path, output.as_deref(), max_size, false, optimized),
         None => {
             // Default: ctx <path> packs and copies to clipboard
             let path = cli.path.as_deref().unwrap_or(".");
-            pack_context(path, None, cli.max_size, true)
+            pack_context(path, None, cli.max_size, true, cli.optimized)
         }
     }
 }
@@ -37,6 +37,10 @@ struct Cli {
     /// Maximum total size in bytes (default: 500KB).
     #[arg(long, default_value = "500000")]
     max_size: usize,
+
+    /// Optimized mode: skip noise dirs (checkpoints, __pycache__, node_modules), prioritize source code.
+    #[arg(short = 'O', long)]
+    optimized: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -59,6 +63,10 @@ enum Commands {
         /// Maximum total size in bytes (default: 500KB).
         #[arg(long, default_value = "500000")]
         max_size: usize,
+
+        /// Optimized mode: skip noise dirs, prioritize source code.
+        #[arg(short = 'O', long)]
+        optimized: bool,
     },
 
     /// Use Claude to gather relevant context for a task.
@@ -91,7 +99,7 @@ enum Commands {
     },
 }
 
-fn pack_context(path: &str, output: Option<&str>, max_size: usize, to_clipboard: bool) -> Result<()> {
+fn pack_context(path: &str, output: Option<&str>, max_size: usize, to_clipboard: bool, optimized: bool) -> Result<()> {
     let root = expand_tilde(path);
     let root_path = fs::canonicalize(Path::new(&root)).context("failed to resolve path")?;
 
@@ -103,6 +111,7 @@ fn pack_context(path: &str, output: Option<&str>, max_size: usize, to_clipboard:
     let mut total_size: usize = 0;
     let mut file_count = 0;
     let mut skipped_count = 0;
+    let mut noise_skipped = 0;
 
     // Header with root path
     context.push_str("<file_map>\n");
@@ -118,17 +127,29 @@ fn pack_context(path: &str, output: Option<&str>, max_size: usize, to_clipboard:
         .git_exclude(true)
         .build();
 
-    for entry in walker.flatten() {
+    // Collect files, optionally filtering and prioritizing
+    let mut files: Vec<_> = walker
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .filter(|e| !is_binary_file(e.path()))
+        .collect();
+
+    // In optimized mode, filter out noise and prioritize source code
+    if optimized {
+        let before_count = files.len();
+        files.retain(|e| !should_skip_path(e.path()));
+        noise_skipped = before_count - files.len();
+
+        // Sort: source code first, then config, then docs
+        files.sort_by(|a, b| {
+            let a_priority = file_priority(a.path());
+            let b_priority = file_priority(b.path());
+            a_priority.cmp(&b_priority)
+        });
+    }
+
+    for entry in files {
         let entry_path = entry.path();
-
-        if !entry_path.is_file() {
-            continue;
-        }
-
-        // Skip binary and large files
-        if is_binary_file(entry_path) {
-            continue;
-        }
 
         // Read file content
         let content = match fs::read_to_string(entry_path) {
@@ -158,18 +179,22 @@ fn pack_context(path: &str, output: Option<&str>, max_size: usize, to_clipboard:
     context.push_str("</file_contents>\n");
 
     // Output
+    let mode_str = if optimized { " (optimized)" } else { "" };
     if to_clipboard {
         copy_to_clipboard(&context)?;
+        let mut msg = format!("copied {} files ({} bytes) to clipboard{}", file_count, context.len(), mode_str);
+        if noise_skipped > 0 {
+            msg.push_str(&format!(", filtered {} noise files", noise_skipped));
+        }
         if skipped_count > 0 {
             let skipped_word = if skipped_count == 1 { "file" } else { "files" };
-            eprintln!("copied {} files ({} bytes) to clipboard, skipped {} large {}", file_count, context.len(), skipped_count, skipped_word);
-        } else {
-            eprintln!("copied {} files ({} bytes) to clipboard", file_count, context.len());
+            msg.push_str(&format!(", skipped {} large {}", skipped_count, skipped_word));
         }
+        eprintln!("{}", msg);
     } else if let Some(out_path) = output {
         let expanded = expand_tilde(out_path);
         fs::write(&expanded, &context).context("failed to write output file")?;
-        eprintln!("wrote {} files ({} bytes) to {}", file_count, context.len(), expanded);
+        eprintln!("wrote {} files ({} bytes) to {}{}", file_count, context.len(), expanded, mode_str);
     } else {
         print!("{}", context);
     }
@@ -534,6 +559,138 @@ fn get_language_hint(path: &Path) -> &'static str {
             }
         }
     }
+}
+
+/// Check if a path should be skipped in optimized mode
+fn should_skip_path(path: &Path) -> bool {
+    let path_str = path.to_string_lossy().to_lowercase();
+
+    // Skip noise directories
+    let noise_dirs = [
+        "__pycache__",
+        "node_modules",
+        ".next",
+        "checkpoints",
+        "checkpoint",
+        ".cache",
+        "cache",
+        "dist",
+        "build",
+        "target",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "venv",
+        ".venv",
+        "env",
+        ".tox",
+        "coverage",
+        ".coverage",
+        "htmlcov",
+        ".eggs",
+        "*.egg-info",
+        ".ipynb_checkpoints",
+        "wandb",
+        "mlruns",
+        "logs",
+        "tmp",
+        "temp",
+    ];
+
+    for noise in noise_dirs {
+        if path_str.contains(&format!("/{}/", noise)) || path_str.contains(&format!("\\{}\\", noise)) {
+            return true;
+        }
+    }
+
+    // Skip noise file extensions
+    let noise_extensions = [
+        "ocdbt", "ckpt", "pth", "pt", "safetensors", "bin", "h5", "pkl", "pickle",
+        "npy", "npz", "tfrecord", "parquet", "feather",
+        "log", "bak", "swp", "swo",
+        "min.js", "min.css", "map",
+        "d.ts",  // TypeScript declaration files (often generated)
+    ];
+
+    if let Some(ext) = path.extension() {
+        let ext_lower = ext.to_string_lossy().to_lowercase();
+        if noise_extensions.contains(&ext_lower.as_str()) {
+            return true;
+        }
+    }
+
+    // Skip noise file names
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let noise_files = [
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "poetry.lock",
+        "Pipfile.lock",
+        "composer.lock",
+        "Gemfile.lock",
+        "go.sum",
+        ".DS_Store",
+        "Thumbs.db",
+        "_METADATA",
+        "_CHECKPOINT_METADATA",
+        "_sharding",
+    ];
+
+    if noise_files.contains(&name.as_ref()) {
+        return true;
+    }
+
+    // Skip files starting with underscore in certain patterns (often generated)
+    if name.starts_with("_") && (name.ends_with(".py") || name.ends_with(".js")) {
+        // But keep __init__.py and __main__.py
+        if name != "__init__.py" && name != "__main__.py" {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Get priority for file sorting (lower = higher priority, included first)
+fn file_priority(path: &Path) -> u8 {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+
+    // Priority 0: Main entry points
+    if name == "main.rs" || name == "lib.rs" || name == "main.py" || name == "app.py"
+        || name == "index.ts" || name == "index.js" || name == "mod.rs"
+    {
+        return 0;
+    }
+
+    // Priority 1: Source code
+    match ext {
+        "rs" | "py" | "go" | "ts" | "tsx" | "js" | "jsx" | "swift" | "kt" | "java" | "c" | "cpp" | "h" | "hpp" | "cs" | "rb" | "php" => return 1,
+        _ => {}
+    }
+
+    // Priority 2: Config that affects behavior
+    if name == "Cargo.toml" || name == "pyproject.toml" || name == "package.json"
+        || name == "tsconfig.json" || name == "go.mod"
+    {
+        return 2;
+    }
+
+    // Priority 3: Other config files
+    match ext {
+        "toml" | "yaml" | "yml" | "json" | "ini" | "cfg" => return 3,
+        _ => {}
+    }
+
+    // Priority 4: Documentation
+    match ext {
+        "md" | "rst" | "txt" => return 4,
+        _ => {}
+    }
+
+    // Priority 5: Everything else
+    5
 }
 
 fn expand_tilde(path: &str) -> String {
