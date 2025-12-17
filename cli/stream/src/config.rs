@@ -94,6 +94,18 @@ pub struct LocalConfig {
     pub transport: Option<Transport>,
     #[serde(default)]
     pub extra_args: Vec<String>,
+    /// Process priority: -20 (highest) to 19 (lowest). Default: 10 (low priority).
+    #[serde(default = "default_nice")]
+    pub nice: i32,
+    /// Use realtime scheduling (requires root or proper entitlements).
+    #[serde(default)]
+    pub realtime: bool,
+    /// Probing size in bytes (lower = faster start, less accurate detection).
+    #[serde(default = "default_probesize")]
+    pub probesize: u32,
+    /// Analysis duration in microseconds.
+    #[serde(default = "default_analyzeduration")]
+    pub analyzeduration: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,4 +289,16 @@ fn default_remote_format() -> String {
 
 fn default_copy() -> bool {
     true
+}
+
+fn default_nice() -> i32 {
+    10 // Low priority by default to minimize system impact
+}
+
+fn default_probesize() -> u32 {
+    32 // Very small probe for instant start
+}
+
+fn default_analyzeduration() -> u32 {
+    0 // Skip analysis for known input
 }

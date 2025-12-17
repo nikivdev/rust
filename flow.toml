@@ -14,6 +14,8 @@ Available tasks:
 - deploy                 Build the Flow CLI binary and install it to ~/bin/flow-rs.
 - deploy-ghostty-switch  Install the ghostty-switch helper to ~/bin.
 - stream [args...]       Run the Stream CLI (passes CLI args through).
+- deploy-stream          Build the Stream CLI binary and install it to ~/bin/stream.
+- deploy-stream-server   Build and deploy stream server to Linux host (65.108.248.119).
 - code [args...]         Run the Code CLI (passes CLI args through).
 - try [args...]          Run the Try CLI (passes CLI args through).
 - try-build              Build the Try CLI binary (dev profile).
@@ -453,3 +455,84 @@ chmod 755 "$bin_dir/$bin_name"
 echo "Installed CLI to $bin_dir/$bin_name"
 """
 description = "Build the Accessibility CLI binary and install it to ~/bin/ax."
+
+[[tasks]]
+name = "deploy-stream"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="stream"
+bin_name="stream"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/stream/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Stream CLI binary and install it to ~/bin/stream."
+
+[[tasks]]
+name = "deploy-stream-server"
+command = """
+set -euo pipefail
+REMOTE_HOST="root@65.108.248.119"
+REMOTE_DIR="/root/stream-server"
+
+echo "Creating remote directory..."
+ssh "$REMOTE_HOST" "mkdir -p $REMOTE_DIR/src"
+
+echo "Copying source files..."
+scp "$PWD/server/stream/Cargo.toml" "$REMOTE_HOST:$REMOTE_DIR/"
+scp "$PWD/server/stream/src/main.rs" "$REMOTE_HOST:$REMOTE_DIR/src/"
+scp "$PWD/server/stream/src/receiver.rs" "$REMOTE_HOST:$REMOTE_DIR/src/"
+scp "$PWD/server/stream/src/s3.rs" "$REMOTE_HOST:$REMOTE_DIR/src/"
+scp "$PWD/server/stream/src/watcher.rs" "$REMOTE_HOST:$REMOTE_DIR/src/"
+scp "$PWD/server/stream/stream-server.service" "$REMOTE_HOST:/etc/systemd/system/"
+
+echo "Installing Rust and building on remote (this may take a while)..."
+ssh "$REMOTE_HOST" "
+  set -euo pipefail
+
+  # Install Rust if not present
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo 'Installing Rust...'
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source ~/.cargo/env
+  fi
+  source ~/.cargo/env 2>/dev/null || true
+
+  # Install ffmpeg if not present
+  if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo 'Installing ffmpeg...'
+    apt-get update -qq && apt-get install -y -qq ffmpeg
+  fi
+
+  # Build
+  cd $REMOTE_DIR
+  cargo build --release
+
+  # Install
+  cp target/release/stream-server /usr/local/bin/
+  chmod 755 /usr/local/bin/stream-server
+
+  # Create directories
+  mkdir -p /root/stream/segments
+
+  # Setup systemd service
+  systemctl daemon-reload
+  systemctl enable stream-server
+
+  echo 'Stream server installed to /usr/local/bin/stream-server'
+  echo 'To start: systemctl start stream-server'
+  echo 'To check status: systemctl status stream-server'
+  echo 'Configure S3 bucket in /etc/systemd/system/stream-server.service'
+"
+"""
+description = "Build and deploy stream server to Linux host (65.108.248.119)."

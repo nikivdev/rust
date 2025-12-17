@@ -14,6 +14,7 @@ members = [
     "cli/personal-mcp",
     "cli/ax",
     "lib/linsa",
+    "server/stream",
     # "lib/lin-rs",  # requires local outlines-core fork
 ]
 resolver = "2"

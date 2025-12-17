@@ -33,6 +33,11 @@ audio_bitrate = "192k"
 scale_filter = "scale=-2:1440:flags=lanczos"
 filters = ["format=yuv420p"]
 extra_args = ["-vsync", "1", "-color_range", "pc"]
+# Process priority: 10 = low priority (default), 19 = lowest (zero-impact)
+nice = 10
+# Fast startup: minimal probing for known capture source
+probesize = 32
+analyzeduration = 0
 
 [profiles.main.local.capture]
 type = "avfoundation"
@@ -99,4 +104,64 @@ allow_sw = false
 [profiles.obs.local.transport]
 type = "srt"
 latency_ms = 30
+packet_size = 1316
+
+# Zero-impact profile: designed for absolutely no performance impact on the host system.
+# Uses lowest process priority, hardware encoding only, and minimal CPU overhead.
+[profiles.zero-impact]
+description = "Zero-impact streaming: lowest priority, hardware encoding, no perceptible system impact."
+
+[profiles.zero-impact.remote]
+host = "stream-box.local"
+user = "stream"
+tmux_session = "streamd"
+ingest_port = 6000
+packet_size = 1316
+
+[profiles.zero-impact.remote.runner]
+type = "ffmpeg"
+output = "/home/stream/recordings/current.ts"
+format = "mpegts"
+copy_video = true
+copy_audio = true
+
+[profiles.zero-impact.local]
+ffmpeg_path = "/opt/homebrew/bin/ffmpeg"
+fps = 60
+# Moderate bitrate - good quality without excessive bandwidth
+video_bitrate = "6000k"
+maxrate = "8000k"
+bufsize = "12000k"
+audio_bitrate = "128k"
+# No scaling = zero CPU for video processing
+# If you need scaling, use VideoToolbox: scale_filter = "scale_vt=-2:1080"
+# Process priority: 19 = lowest possible (idle priority)
+nice = 19
+# Instant startup
+probesize = 32
+analyzeduration = 0
+
+[profiles.zero-impact.local.capture]
+type = "avfoundation"
+video_device = "1"
+audio_device = "none"
+pixel_format = "uyvy422"
+capture_cursor = true
+capture_clicks = false
+thread_queue_size = 512
+
+[profiles.zero-impact.local.encoder]
+# VideoToolbox = 100% hardware encoding via Apple Silicon GPU
+# Uses dedicated media engine, zero CPU impact
+type = "h264_videotoolbox"
+# "Speed" = faster encoding, less compute, slightly larger files
+# "Quality" = better compression but more GPU work
+quality = "Speed"
+# Never fall back to software encoding
+allow_sw = false
+
+[profiles.zero-impact.local.transport]
+type = "srt"
+# Lower latency = less buffering overhead
+latency_ms = 20
 packet_size = 1316

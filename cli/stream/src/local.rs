@@ -14,6 +14,8 @@ pub struct CommandSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub preview: String,
+    pub nice: i32,
+    pub realtime: bool,
 }
 
 pub struct LocalLaunch {
@@ -27,6 +29,12 @@ pub fn build_command(local: &LocalConfig, remote: &RemoteConfig) -> Result<Comma
     args.push("-hide_banner".into());
     args.push("-loglevel".into());
     args.push("warning".into());
+
+    // Fast startup: minimal probing for known capture source
+    args.push("-probesize".into());
+    args.push(local.probesize.to_string());
+    args.push("-analyzeduration".into());
+    args.push(local.analyzeduration.to_string());
 
     args.extend(build_capture_args(&local.capture, local.fps));
 
@@ -107,12 +115,19 @@ pub fn build_command(local: &LocalConfig, remote: &RemoteConfig) -> Result<Comma
     };
     args.push(output_url);
 
-    let preview = format!("{} {}", program.display(), join_shell_words(&args));
+    let nice_prefix = if local.nice != 0 {
+        format!("nice -n {} ", local.nice)
+    } else {
+        String::new()
+    };
+    let preview = format!("{}{} {}", nice_prefix, program.display(), join_shell_words(&args));
 
     Ok(CommandSpec {
         program,
         args,
         preview,
+        nice: local.nice,
+        realtime: local.realtime,
     })
 }
 
@@ -132,6 +147,22 @@ pub fn spawn_local(spec: &CommandSpec, log_dir: &Path) -> Result<LocalLaunch> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+
+    // Set process priority before exec
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let nice = spec.nice;
+        unsafe {
+            cmd.pre_exec(move || {
+                // Set nice value (lower priority = higher nice value)
+                if nice != 0 {
+                    libc::setpriority(libc::PRIO_PROCESS, 0, nice);
+                }
+                Ok(())
+            });
+        }
+    }
 
     let child = cmd
         .spawn()
