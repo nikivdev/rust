@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use std::fs;
 use std::io::Write;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use ignore::WalkBuilder;
 
@@ -20,6 +20,17 @@ fn try_main() -> Result<()> {
     match cli.command {
         Some(Commands::Gather { path, task, max_size, output, optimized }) => gather_context(&path, &task, max_size, output.as_deref(), optimized),
         Some(Commands::Pack { path, output, max_size, optimized }) => pack_context(&path, output.as_deref(), max_size, false, optimized),
+        // rp-cli wrappers
+        Some(Commands::Tree { folders, mode }) => rp_tree(folders, mode.as_deref()),
+        Some(Commands::Search { pattern, extensions, context_lines }) => rp_search(&pattern, extensions.as_deref(), context_lines),
+        Some(Commands::Read { path, start_line, limit }) => rp_read(&path, start_line, limit),
+        Some(Commands::Structure { paths, scope }) => rp_structure(paths, scope.as_deref()),
+        Some(Commands::Select { action, paths }) => rp_select(&action, paths),
+        Some(Commands::Context { include }) => rp_context(include.as_deref()),
+        Some(Commands::Chat { message, mode }) => rp_chat(&message, mode.as_deref()),
+        Some(Commands::Workspace { action }) => rp_workspace(action.as_deref()),
+        Some(Commands::Builder { instructions, response_type }) => rp_builder(&instructions, response_type.as_deref()),
+        Some(Commands::Rp { command }) => rp_exec(&command),
         None => {
             // Default: ctx <path> packs and copies to clipboard
             let path = cli.path.as_deref().unwrap_or(".");
@@ -96,6 +107,155 @@ enum Commands {
         /// Optimized mode: fewer files, no tree in output, skip config/build files.
         #[arg(long)]
         optimized: bool,
+    },
+
+    // ── rp-cli wrappers ─────────────────────────────────────────────────
+
+    /// Show file/folder tree from RepoPrompt workspace.
+    ///
+    /// Examples:
+    ///   ctx tree
+    ///   ctx tree --folders
+    ///   ctx tree --mode selected
+    #[command(alias = "t")]
+    Tree {
+        /// Show only folders.
+        #[arg(long)]
+        folders: bool,
+
+        /// Tree mode: full or selected.
+        #[arg(long)]
+        mode: Option<String>,
+    },
+
+    /// Search files in RepoPrompt workspace.
+    ///
+    /// Examples:
+    ///   ctx search "TODO"
+    ///   ctx search "func" --extensions .swift,.rs
+    #[command(alias = "grep")]
+    Search {
+        /// Search pattern.
+        pattern: String,
+
+        /// File extensions to search (comma-separated, e.g., ".swift,.rs").
+        #[arg(long, short = 'e')]
+        extensions: Option<String>,
+
+        /// Context lines around matches.
+        #[arg(long, short = 'C')]
+        context_lines: Option<u32>,
+    },
+
+    /// Read file contents from RepoPrompt workspace.
+    ///
+    /// Examples:
+    ///   ctx read src/main.rs
+    ///   ctx read src/main.rs --start-line 10 --limit 50
+    #[command(alias = "cat")]
+    Read {
+        /// File path to read.
+        path: String,
+
+        /// Start reading from this line.
+        #[arg(long)]
+        start_line: Option<u32>,
+
+        /// Maximum lines to read.
+        #[arg(long)]
+        limit: Option<u32>,
+    },
+
+    /// Show code structure/signatures from RepoPrompt workspace.
+    ///
+    /// Examples:
+    ///   ctx structure
+    ///   ctx structure src/
+    ///   ctx structure --scope selected
+    #[command(alias = "map")]
+    Structure {
+        /// Paths to analyze.
+        paths: Vec<String>,
+
+        /// Scope: all or selected.
+        #[arg(long)]
+        scope: Option<String>,
+    },
+
+    /// Manage file selection in RepoPrompt workspace.
+    ///
+    /// Examples:
+    ///   ctx select add src/
+    ///   ctx select set src/main.rs src/lib.rs
+    ///   ctx select clear
+    #[command(alias = "sel")]
+    Select {
+        /// Action: add, remove, set, clear.
+        action: String,
+
+        /// Paths to add/remove/set.
+        paths: Vec<String>,
+    },
+
+    /// Get workspace context from RepoPrompt.
+    ///
+    /// Examples:
+    ///   ctx context
+    ///   ctx context --include prompt,selection,code
+    #[command(alias = "ctx")]
+    Context {
+        /// What to include (comma-separated: prompt, selection, code, files, tree).
+        #[arg(long)]
+        include: Option<String>,
+    },
+
+    /// Send chat message to RepoPrompt AI.
+    ///
+    /// Examples:
+    ///   ctx chat "How does authentication work?"
+    ///   ctx chat "Refactor this" --mode edit
+    Chat {
+        /// Message to send.
+        message: String,
+
+        /// Chat mode: chat, plan, or edit.
+        #[arg(long)]
+        mode: Option<String>,
+    },
+
+    /// Manage RepoPrompt workspaces.
+    ///
+    /// Examples:
+    ///   ctx workspace list
+    ///   ctx workspace switch
+    #[command(alias = "ws")]
+    Workspace {
+        /// Action: list, switch, tabs, tab.
+        action: Option<String>,
+    },
+
+    /// Auto-build context using AI.
+    ///
+    /// Examples:
+    ///   ctx builder "implement user login"
+    ///   ctx builder "fix the bug" --response-type question
+    Builder {
+        /// Instructions for building context.
+        instructions: String,
+
+        /// Response type: plan or question.
+        #[arg(long)]
+        response_type: Option<String>,
+    },
+
+    /// Execute raw rp-cli command.
+    ///
+    /// Examples:
+    ///   ctx rp "tree"
+    ///   ctx rp "select set src/ && context"
+    Rp {
+        /// Command to execute.
+        command: String,
     },
 }
 
@@ -700,4 +860,113 @@ fn expand_tilde(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+// ── rp-cli wrapper functions ─────────────────────────────────────────────────
+
+/// Execute an rp-cli command and print output
+fn rp_exec(cmd: &str) -> Result<()> {
+    let output = Command::new("rp-cli")
+        .args(["-e", cmd])
+        .output()
+        .context("failed to run rp-cli (is it installed?)")?;
+
+    if !output.stdout.is_empty() {
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+    }
+    if !output.stderr.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    if !output.status.success() {
+        bail!("rp-cli exited with status {}", output.status);
+    }
+
+    Ok(())
+}
+
+fn rp_tree(folders: bool, mode: Option<&str>) -> Result<()> {
+    let mut cmd = String::from("tree");
+    if folders {
+        cmd.push_str(" --folders");
+    }
+    if let Some(m) = mode {
+        cmd.push_str(&format!(" --mode {}", m));
+    }
+    rp_exec(&cmd)
+}
+
+fn rp_search(pattern: &str, extensions: Option<&str>, context_lines: Option<u32>) -> Result<()> {
+    let mut cmd = format!("search \"{}\"", pattern.replace('"', "\\\""));
+    if let Some(ext) = extensions {
+        cmd.push_str(&format!(" --extensions {}", ext));
+    }
+    if let Some(lines) = context_lines {
+        cmd.push_str(&format!(" --context-lines {}", lines));
+    }
+    rp_exec(&cmd)
+}
+
+fn rp_read(path: &str, start_line: Option<u32>, limit: Option<u32>) -> Result<()> {
+    let mut cmd = format!("read {}", path);
+    if let Some(start) = start_line {
+        cmd.push_str(&format!(" --start-line {}", start));
+    }
+    if let Some(lim) = limit {
+        cmd.push_str(&format!(" --limit {}", lim));
+    }
+    rp_exec(&cmd)
+}
+
+fn rp_structure(paths: Vec<String>, scope: Option<&str>) -> Result<()> {
+    let mut cmd = String::from("structure");
+    for p in paths {
+        cmd.push_str(&format!(" {}", p));
+    }
+    if let Some(s) = scope {
+        cmd.push_str(&format!(" --scope {}", s));
+    }
+    rp_exec(&cmd)
+}
+
+fn rp_select(action: &str, paths: Vec<String>) -> Result<()> {
+    let mut cmd = format!("select {}", action);
+    for p in paths {
+        cmd.push_str(&format!(" {}", p));
+    }
+    rp_exec(&cmd)
+}
+
+fn rp_context(include: Option<&str>) -> Result<()> {
+    let mut cmd = String::from("context");
+    if let Some(inc) = include {
+        cmd.push_str(&format!(" --include {}", inc));
+    }
+    rp_exec(&cmd)
+}
+
+fn rp_chat(message: &str, mode: Option<&str>) -> Result<()> {
+    let mut cmd = format!("chat \"{}\"", message.replace('"', "\\\""));
+    if let Some(m) = mode {
+        cmd.push_str(&format!(" --mode {}", m));
+    }
+    rp_exec(&cmd)
+}
+
+fn rp_workspace(action: Option<&str>) -> Result<()> {
+    let mut cmd = String::from("workspace");
+    if let Some(a) = action {
+        cmd.push_str(&format!(" {}", a));
+    } else {
+        cmd.push_str(" list");
+    }
+    rp_exec(&cmd)
+}
+
+fn rp_builder(instructions: &str, response_type: Option<&str>) -> Result<()> {
+    let mut cmd = format!("builder \"{}\"", instructions.replace('"', "\\\""));
+    if let Some(rt) = response_type {
+        cmd.push_str(&format!(" --response-type {}", rt));
+    }
+    rp_exec(&cmd)
 }
