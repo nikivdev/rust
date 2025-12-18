@@ -33,6 +33,12 @@ Available tasks:
 - deploy-personal-mcp    Build the personal MCP server and install it to ~/bin/personal-mcp.
 - ax [args...]           Run the Accessibility CLI (passes CLI args through).
 - deploy-ax              Build the Accessibility CLI binary and install it to ~/bin/ax.
+
+Streaming (macOS → Linux):
+- stream [setup/start/stop/status]  Guided streaming setup and control.
+
+Linux Server (65.108.248.119):
+- linux                  SSH or manage Linux server (ssh/status/reboot/top/disk/logs/cleanup).
 EOF
 """
 description = "List available tasks."
@@ -152,14 +158,102 @@ description = "Install the ghostty-switch helper script to ~/bin/ghostty-switch.
 name = "stream"
 command = """
 set -euo pipefail
-repo_root="$PWD"
-export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
-mkdir -p "$CARGO_HOME"
-mkdir -p "$CARGO_TARGET_DIR"
-cargo run --manifest-path "$repo_root/cli/stream/Cargo.toml" -- "$@"
+REMOTE_HOST="root@65.108.248.119"
+REMOTE_DIR="/root/stream-server"
+ACTION="${1:-menu}"
+
+case "$ACTION" in
+  start)
+    echo "==> Starting streaming..."
+    stream start --skip-remote
+    ;;
+  stop)
+    stream stop
+    ;;
+  status)
+    echo "=== Local ==="
+    stream status 2>/dev/null || echo "No local stream"
+    echo ""
+    echo "=== Remote ==="
+    curl -s "http://65.108.248.119:8080/status" 2>/dev/null | python3 -m json.tool || echo "Server not responding"
+    ;;
+  setup)
+    echo "╔══════════════════════════════════════╗"
+    echo "║  Stream Setup - macOS → Linux        ║"
+    echo "╚══════════════════════════════════════╝"
+    echo ""
+    echo "==> Step 1/4: Building stream CLI..."
+    cargo build --manifest-path "$PWD/cli/stream/Cargo.toml" --release 2>&1 | tail -3
+    cp "$PWD/target/release/stream" "$HOME/bin/"
+    echo "✓ Stream CLI installed"
+    echo ""
+    echo "==> Step 2/4: Testing SSH..."
+    if ssh -o ConnectTimeout=10 -o BatchMode=yes "$REMOTE_HOST" "echo ok" >/dev/null 2>&1; then
+      echo "✓ SSH connection works"
+    else
+      echo "✗ SSH failed - check connection"
+      exit 1
+    fi
+    echo ""
+    echo "==> Step 3/4: Setting up Linux server..."
+    ssh "$REMOTE_HOST" "mkdir -p $REMOTE_DIR/src"
+    scp -q "$PWD/server/stream/Cargo.toml" "$REMOTE_HOST:$REMOTE_DIR/"
+    scp -q "$PWD/server/stream/src/"*.rs "$REMOTE_HOST:$REMOTE_DIR/src/"
+    scp -q "$PWD/server/stream/stream-server.service" "$REMOTE_HOST:/etc/systemd/system/"
+    echo "✓ Files copied"
+    ssh -o ServerAliveInterval=30 "$REMOTE_HOST" '
+      source ~/.cargo/env 2>/dev/null || true
+      if ! command -v cargo >/dev/null 2>&1; then
+        echo "Installing Rust..."
+        curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source ~/.cargo/env
+      fi
+      if ! command -v ffmpeg >/dev/null 2>&1; then
+        echo "Installing ffmpeg..."
+        apt-get update -qq && apt-get install -y -qq ffmpeg build-essential pkg-config libssl-dev
+      fi
+      cd /root/stream-server
+      echo "Building server..."
+      cargo build --release 2>&1 | grep -E "(Compiling stream-server|Finished|error)" || true
+      cp target/release/stream-server /usr/local/bin/ 2>/dev/null || true
+      mkdir -p /root/stream/segments
+      systemctl daemon-reload
+      systemctl enable stream-server
+      systemctl restart stream-server
+    '
+    echo "✓ Server deployed"
+    echo ""
+    echo "==> Step 4/4: Verifying..."
+    sleep 2
+    if curl -s "http://65.108.248.119:8080/health" >/dev/null 2>&1; then
+      echo "✓ Server is running"
+    else
+      echo "! Server not responding yet (may still be starting)"
+    fi
+    echo ""
+    echo "Setup complete!"
+    echo ""
+    echo "Next: flow stream start"
+    ;;
+  *)
+    echo "╔══════════════════════════════════════╗"
+    echo "║  Stream - macOS → Linux              ║"
+    echo "╚══════════════════════════════════════╝"
+    echo ""
+    echo "Usage: flow stream <command>"
+    echo ""
+    echo "  setup   Full guided setup (first time)"
+    echo "  start   Start streaming"
+    echo "  stop    Stop streaming"
+    echo "  status  Check status"
+    echo ""
+    echo "Quick start:"
+    echo "  flow stream setup"
+    echo "  flow stream start"
+    ;;
+esac
 """
-description = "Run the Stream CLI (passes CLI args through)."
+description = "Streaming setup and control (setup/start/stop/status)."
 
 [[tasks]]
 name = "code"
@@ -485,10 +579,10 @@ set -euo pipefail
 REMOTE_HOST="root@65.108.248.119"
 REMOTE_DIR="/root/stream-server"
 
-echo "Creating remote directory..."
-ssh "$REMOTE_HOST" "mkdir -p $REMOTE_DIR/src"
+echo "=== Step 1: Creating remote directory ==="
+ssh -o ConnectTimeout=30 "$REMOTE_HOST" "mkdir -p $REMOTE_DIR/src"
 
-echo "Copying source files..."
+echo "=== Step 2: Copying source files ==="
 scp "$PWD/server/stream/Cargo.toml" "$REMOTE_HOST:$REMOTE_DIR/"
 scp "$PWD/server/stream/src/main.rs" "$REMOTE_HOST:$REMOTE_DIR/src/"
 scp "$PWD/server/stream/src/receiver.rs" "$REMOTE_HOST:$REMOTE_DIR/src/"
@@ -496,15 +590,20 @@ scp "$PWD/server/stream/src/s3.rs" "$REMOTE_HOST:$REMOTE_DIR/src/"
 scp "$PWD/server/stream/src/watcher.rs" "$REMOTE_HOST:$REMOTE_DIR/src/"
 scp "$PWD/server/stream/stream-server.service" "$REMOTE_HOST:/etc/systemd/system/"
 
-echo "Installing Rust and building on remote (this may take a while)..."
-ssh "$REMOTE_HOST" "
+echo "=== Step 3: Installing dependencies and building (this takes a few minutes) ==="
+ssh -o ServerAliveInterval=60 "$REMOTE_HOST" "
   set -euo pipefail
+
+  # Install build tools if needed
+  if ! command -v gcc >/dev/null 2>&1; then
+    echo 'Installing build tools...'
+    apt-get update -qq && apt-get install -y -qq build-essential pkg-config libssl-dev
+  fi
 
   # Install Rust if not present
   if ! command -v cargo >/dev/null 2>&1; then
     echo 'Installing Rust...'
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source ~/.cargo/env
   fi
   source ~/.cargo/env 2>/dev/null || true
 
@@ -516,7 +615,8 @@ ssh "$REMOTE_HOST" "
 
   # Build
   cd $REMOTE_DIR
-  cargo build --release
+  echo 'Building stream-server (this may take a few minutes)...'
+  cargo build --release 2>&1
 
   # Install
   cp target/release/stream-server /usr/local/bin/
@@ -528,11 +628,91 @@ ssh "$REMOTE_HOST" "
   # Setup systemd service
   systemctl daemon-reload
   systemctl enable stream-server
+  systemctl restart stream-server
 
-  echo 'Stream server installed to /usr/local/bin/stream-server'
-  echo 'To start: systemctl start stream-server'
-  echo 'To check status: systemctl status stream-server'
-  echo 'Configure S3 bucket in /etc/systemd/system/stream-server.service'
+  echo ''
+  echo '=== Stream server deployed and started ==='
+  systemctl status stream-server --no-pager || true
 "
 """
 description = "Build and deploy stream server to Linux host (65.108.248.119)."
+
+# ============================================================================
+# Linux Server Management (65.108.248.119)
+# ============================================================================
+
+[[tasks]]
+name = "linux"
+command = """
+set -euo pipefail
+REMOTE="root@65.108.248.119"
+ACTION="${1:-ssh}"
+
+case "$ACTION" in
+  ssh|shell)
+    ssh "$REMOTE"
+    ;;
+  status)
+    ssh -o ConnectTimeout=10 "$REMOTE" '
+      echo "=== System ===" && uname -n && uptime
+      echo "" && echo "=== Memory ===" && free -h | head -2
+      echo "" && echo "=== Disk ===" && df -h / | tail -1
+      echo "" && echo "=== Services ==="
+      systemctl is-active stream-server 2>/dev/null && echo "stream-server: running" || echo "stream-server: stopped"
+    '
+    ;;
+  reboot)
+    echo "Rebooting..."
+    ssh -o ConnectTimeout=10 "$REMOTE" "reboot" || true
+    echo "Waiting 30s..."
+    sleep 30
+    ssh -o ConnectTimeout=30 "$REMOTE" "uptime" && echo "Server is back!"
+    ;;
+  top)
+    ssh -t "$REMOTE" "htop 2>/dev/null || top"
+    ;;
+  disk)
+    ssh -o ConnectTimeout=10 "$REMOTE" '
+      df -h
+      echo "" && echo "=== Largest in /root ==="
+      du -sh /root/* 2>/dev/null | sort -hr | head -5
+    '
+    ;;
+  logs)
+    ssh -o ConnectTimeout=10 "$REMOTE" "journalctl -n 50 --no-pager"
+    ;;
+  cleanup)
+    ssh -o ConnectTimeout=10 "$REMOTE" '
+      apt-get autoremove -y -qq
+      apt-get clean
+      find /root/stream/segments -name "*.ts" -mtime +1 -delete 2>/dev/null || true
+      echo "Cleanup done" && df -h /
+    '
+    ;;
+  install)
+    PKG="${2:-}"
+    if [ -z "$PKG" ]; then
+      echo "Usage: flow linux install <package>"
+      exit 1
+    fi
+    ssh -o ConnectTimeout=10 "$REMOTE" "apt-get update -qq && apt-get install -y $PKG"
+    ;;
+  *)
+    echo "╔══════════════════════════════════════╗"
+    echo "║  Linux Server (65.108.248.119)       ║"
+    echo "╚══════════════════════════════════════╝"
+    echo ""
+    echo "Usage: flow linux <command>"
+    echo ""
+    echo "  ssh          SSH into server (default)"
+    echo "  status       Check health"
+    echo "  reboot       Reboot server"
+    echo "  top          Process monitor"
+    echo "  disk         Disk usage"
+    echo "  logs         System logs"
+    echo "  cleanup      Clean disk space"
+    echo "  install pkg  Install package"
+    ;;
+esac
+"""
+description = "Linux server management (ssh/status/reboot/top/disk/logs/cleanup)."
