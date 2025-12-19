@@ -34,6 +34,7 @@ fn run_command(cmd: Commands) -> Result<()> {
             WriteDocCommands::Run { title } => write_doc(&title, true),
             WriteDocCommands::Paste { title } => write_doc(&title, false),
         },
+        Commands::Windows { app } => list_app_windows(&app),
     }
 }
 
@@ -44,6 +45,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("empty", "Remove all contents of a directory"),
     ("open", "Open a path in an app (focuses existing window if open)"),
     ("write-doc", "Convert title to slug and paste write docs/<slug> command"),
+    ("windows", "List window titles for an app"),
 ];
 
 fn interactive_select() -> Result<()> {
@@ -132,6 +134,11 @@ enum Commands {
     WriteDoc {
         #[command(subcommand)]
         command: WriteDocCommands,
+    },
+    /// List window titles for an app.
+    Windows {
+        /// App name (e.g., "Zed", "Cursor", "Safari").
+        app: String,
     },
 }
 
@@ -711,4 +718,52 @@ fn title_to_slug(title: &str) -> String {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-")
+}
+
+fn list_app_windows(app: &str) -> Result<()> {
+    let escaped_app = escape_apple_script_string(app);
+
+    let script = format!(
+        r#"set appName to "{app}"
+set windowList to {{}}
+
+tell application "System Events"
+    if not (exists application process appName) then
+        return "NOT_RUNNING"
+    end if
+
+    tell application process appName
+        repeat with w in windows
+            try
+                set winName to name of w
+                if winName is not "" then
+                    set end of windowList to winName
+                end if
+            end try
+        end repeat
+    end tell
+end tell
+
+set AppleScript's text item delimiters to linefeed
+return windowList as text"#,
+        app = escaped_app
+    );
+
+    let result = run_osascript(&script)?;
+
+    if result == "NOT_RUNNING" {
+        println!("{} is not running", app);
+        return Ok(());
+    }
+
+    if result.is_empty() {
+        println!("{} has no windows", app);
+        return Ok(());
+    }
+
+    for line in result.lines() {
+        println!("{}", line);
+    }
+
+    Ok(())
 }
