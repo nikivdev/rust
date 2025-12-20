@@ -716,3 +716,43 @@ case "$ACTION" in
 esac
 """
 description = "Linux server management (ssh/status/reboot/top/disk/logs/cleanup)."
+
+# ============================================================================
+# Intent & Sometime Daemons
+# ============================================================================
+
+[[tasks]]
+name = "intent"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+cargo run --manifest-path "$repo_root/cli/intent/Cargo.toml" -- "$@"
+"""
+description = "Run the Intent CLI (context-aware action daemon)."
+
+[[tasks]]
+name = "deploy-intent"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="intent"
+bin_name="intent"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/intent/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Intent CLI binary and install it to ~/bin/intent."
+
