@@ -12,6 +12,8 @@ Available tasks:
 - setup                  Ensure Cargo is installed and download Flow CLI dependencies.
 - flow [args...]         Run the Flow CLI (passes CLI args through).
 - index [args...]        Run the Index CLI (passes CLI args through).
+- cleanup                Run cleanup scan (writes delete + move candidate CSVs).
+- cleanup-delete         Print Xcode delete targets and write delete CSV.
 - dev [args...]          Alias for flow.
 - run [args...]          Alias for flow.
 - deploy                 Build the Flow CLI binary and install it to ~/bin/flow-rs.
@@ -45,6 +47,22 @@ Linux Server (65.108.248.119):
 EOF
 """
 description = "List available tasks."
+
+[[tasks]]
+name = "cleanup"
+command = """
+set -euo pipefail
+python3 "$PWD/scripts/cleanup.py" --scan-move
+"""
+description = "Run cleanup scan (writes delete + move candidate CSVs)."
+
+[[tasks]]
+name = "cleanup-delete"
+command = """
+set -euo pipefail
+python3 "$PWD/scripts/cleanup.py" --xcode-only
+"""
+description = "Print Xcode delete targets and write delete CSV."
 
 [[tasks]]
 name = "setup"
@@ -865,4 +883,3 @@ chmod 755 "$bin_dir/$bin_name"
 echo "Installed CLI to $bin_dir/$bin_name"
 """
 description = "Build the Intent CLI binary and install it to ~/bin/intent."
-
