@@ -735,6 +735,29 @@ cargo run --manifest-path "$repo_root/cli/intent/Cargo.toml" -- "$@"
 description = "Run the Intent CLI (context-aware action daemon)."
 
 [[tasks]]
+name = "commitWithCheck"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+
+echo "==> Running cargo check..."
+if ! cargo check --workspace 2>&1; then
+  echo "❌ cargo check failed"
+  exit 1
+fi
+echo "✓ cargo check passed"
+
+echo ""
+echo "==> Committing..."
+git add -A
+git commit -m "${1:-Update}"
+echo "✓ Committed"
+"""
+description = "Run cargo check, then commit if it passes."
+
+[[tasks]]
 name = "deploy-intent"
 command = """
 set -euo pipefail
