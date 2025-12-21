@@ -262,7 +262,7 @@ description = "Streaming setup and control (setup/start/stop/status)."
 name = "youtube"
 command = """
 set -euo pipefail
-LINUX_HOST="65.108.248.119"
+LINUX_HOST="100.114.156.47"
 SRT_PORT="6000"
 ACTION="${1:-help}"
 
