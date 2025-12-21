@@ -29,6 +29,8 @@ Available tasks:
 - deploy-claude          Build the Claude CLI binary and install it to ~/bin/claude-rs.
 - mac [args...]          Run the macOS CLI (passes CLI args through).
 - mac-cpu [args...]      Run the macOS CPU TUI (energy --tui).
+- snaps [args...]        Run the Snaps CLI (snapshot apps and close them).
+- deploy-snaps           Build the Snaps CLI binary and install it to ~/bin/snaps.
 - deploy-mac             Build the macOS CLI binary and install it to ~/bin/mac.
 - km [args...]           Run the Keyboard Maestro CLI (passes CLI args through).
 - deploy-km              Build the Keyboard Maestro CLI binary and install it to ~/bin/km.
@@ -491,6 +493,24 @@ cargo run --manifest-path "$work_dir/Cargo.toml" -- energy --tui "$@"
 description = "Run the macOS CPU TUI (energy --tui) without workspace dependencies."
 
 [[tasks]]
+name = "snaps"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/snaps-cli.XXXXXX")"
+cp -R "$repo_root/cli/snaps/." "$work_dir/"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+if [ "${1:-}" = "--" ]; then
+  shift
+fi
+cargo run --manifest-path "$work_dir/Cargo.toml" -- "$@"
+"""
+description = "Run the Snaps CLI (snapshot apps and close them) without workspace dependencies."
+
+[[tasks]]
 name = "deploy-mac"
 command = """
 set -euo pipefail
@@ -511,6 +531,30 @@ chmod 755 "$bin_dir/$bin_name"
 echo "Installed CLI to $bin_dir/$bin_name"
 """
 description = "Build the macOS CLI binary and install it to ~/bin/mac."
+
+[[tasks]]
+name = "deploy-snaps"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="snaps"
+bin_name="snaps"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/snaps-cli.XXXXXX")"
+cp -R "$repo_root/cli/snaps/." "$work_dir/"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$work_dir/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Snaps CLI binary and install it to ~/bin/snaps."
 
 [[tasks]]
 name = "km"
