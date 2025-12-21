@@ -4,6 +4,18 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Layout},
+    style::{Modifier, Style},
+    widgets::{Block, BorderType, Borders, Row, Table},
+    Terminal,
+};
 
 fn main() {
     if let Err(err) = try_main() {
@@ -19,7 +31,21 @@ fn try_main() -> Result<()> {
         Commands::Shortcuts { all } => list_shortcuts(all),
         Commands::Apps { limit } => list_apps(limit),
         Commands::ClipImg => clip_img(),
-        Commands::Energy { limit } => list_energy(limit),
+        Commands::Energy {
+            limit,
+            kill,
+            force,
+            tui,
+        } => {
+            if tui {
+                if !kill.is_empty() || force {
+                    anyhow::bail!("--tui does not support --kill or --force");
+                }
+                run_energy_tui(limit)
+            } else {
+                list_energy(limit, &kill, force)
+            }
+        }
         Commands::Warp(cmd) => match cmd {
             WarpCommands::Title => warp_title(),
         },
@@ -59,6 +85,15 @@ enum Commands {
         /// Limit number of processes shown (default: 15)
         #[arg(long, short)]
         limit: Option<usize>,
+        /// Kill one or more PIDs after listing
+        #[arg(long, num_args = 1..)]
+        kill: Vec<u32>,
+        /// Use SIGKILL instead of SIGTERM
+        #[arg(long)]
+        force: bool,
+        /// Show a live-updating TUI
+        #[arg(long)]
+        tui: bool,
     },
     /// Warp terminal utilities
     #[command(subcommand)]
@@ -841,9 +876,36 @@ struct ProcessEnergy {
     cpu_percent: f64,
 }
 
-fn list_energy(limit: Option<usize>) -> Result<()> {
+fn list_energy(limit: Option<usize>, kill: &[u32], force: bool) -> Result<()> {
     let limit = limit.unwrap_or(15);
 
+    let processes = fetch_energy()?;
+
+    if processes.is_empty() {
+        println!("No processes with significant CPU usage found.");
+        return Ok(());
+    }
+
+    let total = processes.len();
+    let processes: Vec<_> = processes.into_iter().take(limit).collect();
+
+    println!("Top energy consumers (showing {}/{}):\n", processes.len(), total);
+    println!("{:<8} {:>8}  {}", "PID", "CPU %", "PROCESS");
+    println!("{}", "-".repeat(50));
+
+    for p in &processes {
+        println!("{:<8} {:>7.1}%  {}", p.pid, p.cpu_percent, p.name);
+    }
+
+    if !kill.is_empty() {
+        kill_processes(kill, force)?;
+    } else {
+        println!("\nTip: Use `macos energy --kill <PID>` or quit apps to save battery.");
+    }
+    Ok(())
+}
+
+fn fetch_energy() -> Result<Vec<ProcessEnergy>> {
     // Use top to get accurate CPU snapshot (samples for 1 second)
     // -l 2 means 2 samples, second one has actual CPU averages
     // -n 100 limits to top 100 processes
@@ -880,7 +942,8 @@ fn list_energy(limit: Option<usize>) -> Result<()> {
     let start = match start_idx {
         Some(idx) => idx,
         None if pid_headers == 1 => {
-            lines.iter().position(|l| l.contains("PID") && l.contains("CPU"))
+            lines.iter()
+                .position(|l| l.contains("PID") && l.contains("CPU"))
                 .map(|i| i + 1)
                 .ok_or_else(|| anyhow::anyhow!("failed to parse top output"))?
         }
@@ -912,24 +975,112 @@ fn list_energy(limit: Option<usize>) -> Result<()> {
 
     // Sort by CPU descending
     processes.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap());
+    Ok(processes)
+}
 
-    if processes.is_empty() {
-        println!("No processes with significant CPU usage found.");
-        return Ok(());
+fn run_energy_tui(limit: Option<usize>) -> Result<()> {
+    let limit = limit.unwrap_or(20);
+
+    enable_raw_mode().context("failed to enable raw mode")?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen).context("failed to enter alt screen")?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend).context("failed to create terminal")?;
+
+    struct TuiGuard;
+    impl Drop for TuiGuard {
+        fn drop(&mut self) {
+            let _ = disable_raw_mode();
+            let mut stdout = std::io::stdout();
+            let _ = execute!(stdout, LeaveAlternateScreen);
+        }
+    }
+    let _guard = TuiGuard;
+
+    loop {
+        let processes = fetch_energy().unwrap_or_default();
+
+        terminal
+            .draw(|f| {
+                let area = f.size();
+                let layout = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]);
+                let chunks = layout.split(area);
+
+                let rows = processes
+                    .iter()
+                    .take(limit)
+                    .map(|p| {
+                        Row::new(vec![
+                            p.pid.to_string(),
+                            format!("{:.1}", p.cpu_percent),
+                            p.name.clone(),
+                        ])
+                    })
+                    .collect::<Vec<_>>();
+
+                let table = Table::new(
+                    rows,
+                    [
+                        Constraint::Length(8),
+                        Constraint::Length(8),
+                        Constraint::Min(10),
+                    ],
+                )
+                .header(
+                    Row::new(vec!["PID", "CPU %", "PROCESS"])
+                        .style(Style::default().add_modifier(Modifier::BOLD)),
+                )
+                .block(
+                    Block::default()
+                        .title("Top CPU processes")
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Plain),
+                );
+
+                f.render_widget(table, chunks[0]);
+
+                let footer = Block::default()
+                    .title("q: quit  r: refresh")
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Plain);
+                f.render_widget(footer, chunks[1]);
+            })
+            .context("failed to draw UI")?;
+
+        if event::poll(std::time::Duration::from_millis(900))
+            .context("failed to poll events")?
+        {
+            if let Event::Key(key) = event::read().context("failed to read event")? {
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Char('r') => {}
+                    _ => {}
+                }
+            }
+        }
     }
 
-    let total = processes.len();
-    let processes: Vec<_> = processes.into_iter().take(limit).collect();
+    Ok(())
+}
 
-    println!("Top energy consumers (showing {}/{}):\n", processes.len(), total);
-    println!("{:<8} {:>8}  {}", "PID", "CPU %", "PROCESS");
-    println!("{}", "-".repeat(50));
-
-    for p in &processes {
-        println!("{:<8} {:>7.1}%  {}", p.pid, p.cpu_percent, p.name);
+fn kill_processes(pids: &[u32], force: bool) -> Result<()> {
+    let signal = if force { "-9" } else { "-15" };
+    let mut cmd = Command::new("kill");
+    cmd.arg(signal);
+    for pid in pids {
+        cmd.arg(pid.to_string());
     }
 
-    println!("\nTip: Use `kill <PID>` or quit apps to save battery.");
+    let status = cmd.status().context("failed to run kill")?;
+    if !status.success() {
+        anyhow::bail!("kill failed (signal {})", signal);
+    }
+
+    let verb = if force { "SIGKILL" } else { "SIGTERM" };
+    println!(
+        "\nSent {verb} to: {}",
+        pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+    );
     Ok(())
 }
 

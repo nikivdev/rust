@@ -28,6 +28,7 @@ Available tasks:
 - claude [args...]       Run the Claude CLI (passes CLI args through).
 - deploy-claude          Build the Claude CLI binary and install it to ~/bin/claude-rs.
 - mac [args...]          Run the macOS CLI (passes CLI args through).
+- mac-cpu [args...]      Run the macOS CPU TUI (energy --tui).
 - deploy-mac             Build the macOS CLI binary and install it to ~/bin/mac.
 - km [args...]           Run the Keyboard Maestro CLI (passes CLI args through).
 - deploy-km              Build the Keyboard Maestro CLI binary and install it to ~/bin/km.
@@ -470,6 +471,24 @@ mkdir -p "$CARGO_TARGET_DIR"
 cargo run --manifest-path "$repo_root/cli/mac/Cargo.toml" -- "$@"
 """
 description = "Run the macOS CLI (passes CLI args through)."
+
+[[tasks]]
+name = "mac-cpu"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/macos-cli.XXXXXX")"
+cp -R "$repo_root/cli/mac/." "$work_dir/"
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+if [ "${1:-}" = "--" ]; then
+  shift
+fi
+cargo run --manifest-path "$work_dir/Cargo.toml" -- energy --tui "$@"
+"""
+description = "Run the macOS CPU TUI (energy --tui) without workspace dependencies."
 
 [[tasks]]
 name = "deploy-mac"
