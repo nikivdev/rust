@@ -2,7 +2,7 @@
 members = [
     "cli/flow",
     "cli/index",
-    "cli/stream",
+    "cli/observe",
     "cli/code",
     "cli/try",
     "cli/claude",

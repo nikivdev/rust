@@ -551,13 +551,13 @@ echo "Installed CLI to $bin_dir/$bin_name"
 description = "Build the Accessibility CLI binary and install it to ~/bin/ax."
 
 [[tasks]]
-name = "deploy-stream"
+name = "deploy-observe"
 command = """
 set -euo pipefail
 repo_root="$PWD"
 bin_dir="$HOME/bin"
-bin_artifact="stream"
-bin_name="stream"
+bin_artifact="observe"
+bin_name="observe"
 mkdir -p "$bin_dir"
 
 export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
@@ -565,12 +565,12 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
 mkdir -p "$CARGO_HOME"
 mkdir -p "$CARGO_TARGET_DIR"
 
-cargo build --manifest-path "$repo_root/cli/stream/Cargo.toml" --release
+cargo build --manifest-path "$repo_root/cli/observe/Cargo.toml" --release
 cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
 chmod 755 "$bin_dir/$bin_name"
 echo "Installed CLI to $bin_dir/$bin_name"
 """
-description = "Build the Stream CLI binary and install it to ~/bin/stream."
+description = "Build the Observe CLI binary and install it to ~/bin/observe."
 
 [[tasks]]
 name = "deploy-stream-server"
