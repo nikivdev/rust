@@ -1,8 +1,6 @@
 mod watcher;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -108,14 +106,6 @@ fn load_observations(limit: usize) -> Result<Vec<Observation>> {
 fn run_daemon() -> Result<()> {
     eprintln!("Starting observe daemon...");
 
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-
-    ctrlc::set_handler(move || {
-        eprintln!("\nShutting down...");
-        r.store(false, Ordering::SeqCst);
-    })?;
-
     // Watch key directories
     let home = dirs::home_dir().context("get home dir")?;
     let watch_dirs = vec![
@@ -134,9 +124,10 @@ fn run_daemon() -> Result<()> {
         }
     }
 
-    eprintln!("Daemon running (Ctrl+C to stop)");
+    eprintln!("Daemon running...");
 
-    while running.load(Ordering::SeqCst) {
+    // Run forever - Lin will kill us when needed
+    loop {
         // Process file events
         for event in watcher.poll() {
             let project = extract_project(&event.path);
@@ -154,9 +145,6 @@ fn run_daemon() -> Result<()> {
 
         std::thread::sleep(Duration::from_millis(100));
     }
-
-    eprintln!("Daemon stopped");
-    Ok(())
 }
 
 fn extract_project(path: &str) -> Option<String> {

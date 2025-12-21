@@ -1,6 +1,9 @@
 version = 1
 name = "rust"
 
+[flow]
+primary_task = "deploy"
+
 [[tasks]]
 name = "default"
 command = """
