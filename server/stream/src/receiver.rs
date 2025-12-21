@@ -75,6 +75,74 @@ pub async fn start(
     Ok(ReceiverHandle { child })
 }
 
+/// Start ffmpeg to receive SRT stream and output HLS for web playback.
+///
+/// Generates a live HLS playlist (.m3u8) and segment files (.ts)
+/// that can be served via HTTP for web players.
+pub async fn start_hls(
+    ffmpeg_path: &Path,
+    srt_port: u16,
+    hls_dir: &Path,
+    segment_duration: u32,
+) -> Result<ReceiverHandle> {
+    let srt_url = format!("srt://0.0.0.0:{srt_port}?mode=listener");
+    let playlist_path = hls_dir.join("stream.m3u8");
+    let segment_pattern = hls_dir.join("stream%03d.ts");
+
+    // Ensure HLS directory exists
+    std::fs::create_dir_all(hls_dir)?;
+
+    // ffmpeg command for HLS output:
+    // - Receive SRT input (already H.264 from Mac hardware encoder)
+    // - Copy video codec (no re-encoding)
+    // - Ensure audio is AAC (required for HLS)
+    // - Output HLS playlist and segments
+    let mut cmd = Command::new(ffmpeg_path);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        // Input from SRT
+        "-i",
+        &srt_url,
+        // Video: copy (no re-encoding)
+        "-c:v",
+        "copy",
+        // Audio: AAC for HLS compatibility
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        "44100",
+        // HLS output settings
+        "-f",
+        "hls",
+        "-hls_time",
+        &segment_duration.to_string(),
+        "-hls_list_size",
+        "10", // Keep 10 segments in playlist
+        "-hls_flags",
+        "delete_segments+append_list",
+        "-hls_segment_filename",
+        segment_pattern.to_str().unwrap(),
+        // Output playlist
+        playlist_path.to_str().unwrap(),
+    ]);
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    info!("Starting HLS output to {}", hls_dir.display());
+
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("spawn ffmpeg at {}", ffmpeg_path.display()))?;
+
+    Ok(ReceiverHandle { child })
+}
+
 /// Start ffmpeg to receive SRT stream and forward to YouTube RTMP.
 ///
 /// Receives hardware-encoded H.264 from Mac, applies optional filters,

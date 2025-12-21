@@ -15,6 +15,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -54,6 +55,12 @@ struct Config {
     youtube_stream_key: String,
     /// Enable YouTube streaming
     youtube_enabled: bool,
+    /// HLS output directory (for web playback)
+    hls_dir: PathBuf,
+    /// Enable HLS output for web playback
+    hls_enabled: bool,
+    /// HLS segment duration in seconds
+    hls_segment_duration: u32,
 }
 
 impl Default for Config {
@@ -70,6 +77,9 @@ impl Default for Config {
             youtube_rtmp_url: "rtmp://a.rtmp.youtube.com/live2".into(),
             youtube_stream_key: String::new(),
             youtube_enabled: false,
+            hls_dir: PathBuf::from("/root/stream/hls"),
+            hls_enabled: true, // Enable HLS by default for web playback
+            hls_segment_duration: 4,
         }
     }
 }
@@ -127,13 +137,28 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Ensure HLS directory exists
+    if config.hls_enabled {
+        tokio::fs::create_dir_all(&config.hls_dir)
+            .await
+            .with_context(|| format!("create HLS dir {}", config.hls_dir.display()))?;
+    }
+
     // Build HTTP API
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/", get(index))
         .route("/status", get(status))
         .route("/start", get(start_receiver))
         .route("/stop", get(stop_receiver))
-        .route("/health", get(health))
+        .route("/health", get(health));
+
+    // Serve HLS files if enabled
+    if config.hls_enabled {
+        info!("Serving HLS files from {} at /hls/", config.hls_dir.display());
+        app = app.nest_service("/hls", ServeDir::new(&config.hls_dir));
+    }
+
+    let app = app
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state);
@@ -184,6 +209,15 @@ fn load_config() -> Result<Config> {
     }
     if let Ok(enabled) = std::env::var("YOUTUBE_ENABLED") {
         config.youtube_enabled = enabled == "true" || enabled == "1";
+    }
+    if let Ok(dir) = std::env::var("HLS_DIR") {
+        config.hls_dir = PathBuf::from(dir);
+    }
+    if let Ok(enabled) = std::env::var("HLS_ENABLED") {
+        config.hls_enabled = enabled == "true" || enabled == "1";
+    }
+    if let Ok(duration) = std::env::var("HLS_SEGMENT_DURATION") {
+        config.hls_segment_duration = duration.parse().context("parse HLS_SEGMENT_DURATION")?;
     }
 
     Ok(config)
@@ -245,6 +279,15 @@ async fn start_receiver_internal(state: &AppState) -> Result<()> {
             &state.config.youtube_stream_key,
         )
         .await?
+    } else if state.config.hls_enabled {
+        info!("Starting HLS streaming mode");
+        receiver::start_hls(
+            &state.config.ffmpeg_path,
+            state.config.srt_port,
+            &state.config.hls_dir,
+            state.config.hls_segment_duration,
+        )
+        .await?
     } else {
         receiver::start(
             &state.config.ffmpeg_path,
@@ -287,6 +330,12 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         } else {
             None
         },
+        hls_enabled: state.config.hls_enabled,
+        hls_url: if state.config.hls_enabled {
+            Some(format!("/hls/stream.m3u8"))
+        } else {
+            None
+        },
         segments_uploaded: stats.segments_uploaded,
         bytes_uploaded: stats.bytes_uploaded,
         bytes_uploaded_human: human_bytes(stats.bytes_uploaded),
@@ -302,6 +351,8 @@ struct StatusResponse {
     s3_bucket: String,
     youtube_enabled: bool,
     youtube_rtmp_url: Option<String>,
+    hls_enabled: bool,
+    hls_url: Option<String>,
     segments_uploaded: u64,
     bytes_uploaded: u64,
     bytes_uploaded_human: String,
