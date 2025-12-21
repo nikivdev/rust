@@ -6,7 +6,7 @@ members = [
     "cli/code",
     "cli/try",
     "cli/claude",
-    "cli/macos",
+    "cli/mac",
     "cli/km",
     "cli/karabiner",
     "cli/new",

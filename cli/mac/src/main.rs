@@ -20,6 +20,9 @@ fn try_main() -> Result<()> {
         Commands::Apps { limit } => list_apps(limit),
         Commands::ClipImg => clip_img(),
         Commands::Energy { limit } => list_energy(limit),
+        Commands::Warp(cmd) => match cmd {
+            WarpCommands::Title => warp_title(),
+        },
     }
 }
 
@@ -57,6 +60,15 @@ enum Commands {
         #[arg(long, short)]
         limit: Option<usize>,
     },
+    /// Warp terminal utilities
+    #[command(subcommand)]
+    Warp(WarpCommands),
+}
+
+#[derive(Subcommand)]
+enum WarpCommands {
+    /// Extract window title from clipboard (strips path prefix and trailing info)
+    Title,
 }
 
 fn list_shortcuts(show_all: bool) -> Result<()> {
@@ -918,5 +930,55 @@ fn list_energy(limit: Option<usize>) -> Result<()> {
     }
 
     println!("\nTip: Use `kill <PID>` or quit apps to save battery.");
+    Ok(())
+}
+
+// ============================================================================
+// Warp commands
+// ============================================================================
+
+fn warp_title() -> Result<()> {
+    // Get clipboard content
+    let output = Command::new("pbpaste")
+        .output()
+        .context("failed to run pbpaste")?;
+
+    let content = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    // Warp titles look like: "~/lang/rust - fish" or "/Users/nikiv/project - zsh"
+    // Extract the last path component before " - shell"
+
+    // Strip " - <shell>" suffix if present
+    let path_part = content
+        .split(" - ")
+        .next()
+        .unwrap_or(&content);
+
+    // Get last non-empty path component
+    let title = path_part
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .last()
+        .unwrap_or("")
+        .trim();
+
+    if title.is_empty() {
+        anyhow::bail!("could not extract title from clipboard");
+    }
+
+    // Put back in clipboard
+    let mut pbcopy = Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to run pbcopy")?;
+
+    if let Some(stdin) = pbcopy.stdin.as_mut() {
+        use std::io::Write;
+        stdin.write_all(title.as_bytes())?;
+    }
+
+    pbcopy.wait()?;
+
+    println!("{}", title);
     Ok(())
 }
