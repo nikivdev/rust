@@ -259,6 +259,90 @@ esac
 description = "Streaming setup and control (setup/start/stop/status)."
 
 [[tasks]]
+name = "youtube"
+command = """
+set -euo pipefail
+LINUX_HOST="65.108.248.119"
+SRT_PORT="6000"
+ACTION="${1:-help}"
+
+case "$ACTION" in
+  start)
+    echo "==> Starting zero-CPU screen capture..."
+    echo "    ScreenCaptureKit (GPU) → VideoToolbox (GPU) → Linux"
+    echo ""
+    stream-capture start "$LINUX_HOST" "$SRT_PORT"
+    ;;
+  start-ffmpeg)
+    echo "==> Starting ffmpeg capture (fallback)..."
+    ffmpeg -hide_banner \
+      -f avfoundation \
+      -capture_cursor 1 \
+      -framerate 30 \
+      -i "1:0" \
+      -c:v h264_videotoolbox \
+      -realtime 1 \
+      -b:v 4500k \
+      -g 60 \
+      -c:a aac \
+      -b:a 128k \
+      -f mpegts \
+      "srt://$LINUX_HOST:$SRT_PORT"
+    ;;
+  test)
+    echo "Testing capture (no network)..."
+    stream-capture test
+    ;;
+  status)
+    echo "=== Linux Server ==="
+    curl -s "http://$LINUX_HOST:8080/status" 2>/dev/null | python3 -m json.tool || echo "Server not responding"
+    ;;
+  setup)
+    echo "==> Setting up YouTube streaming on Linux..."
+    echo ""
+    echo "1. Get your YouTube stream key from YouTube Studio"
+    echo "2. SSH to Linux and set: export YOUTUBE_STREAM_KEY=your-key"
+    echo "3. Restart stream-server: systemctl restart stream-server"
+    echo ""
+    echo "Or set it now:"
+    read -p "YouTube Stream Key: " KEY
+    if [ -n "$KEY" ]; then
+      ssh "root@$LINUX_HOST" "echo 'YOUTUBE_STREAM_KEY=$KEY' >> /etc/environment && systemctl restart stream-server"
+      echo "✓ Stream key configured"
+    fi
+    ;;
+  stop)
+    echo "Stopping stream on Linux..."
+    curl -s "http://$LINUX_HOST:8080/stop" | python3 -m json.tool || true
+    ;;
+  displays)
+    stream-capture displays
+    ;;
+  *)
+    echo "╔══════════════════════════════════════╗"
+    echo "║  Zero-CPU Streaming (via Linux)      ║"
+    echo "╚══════════════════════════════════════╝"
+    echo ""
+    echo "Usage: f youtube <command>"
+    echo ""
+    echo "  start       Stream using native zero-CPU capture"
+    echo "  start-ffmpeg  Fallback to ffmpeg capture"
+    echo "  test        Test capture locally (no network)"
+    echo "  stop        Stop streaming"
+    echo "  status      Check Linux server status"
+    echo "  setup       Configure YouTube stream key"
+    echo "  displays    List available displays"
+    echo ""
+    echo "Architecture (zero CPU on Mac):"
+    echo "  ScreenCaptureKit (GPU) → VideoToolbox (GPU) → UDP → Linux"
+    echo ""
+    echo "CPU usage on Mac: <1%"
+    ;;
+esac
+"""
+description = "Stream to YouTube via Linux with zero Mac CPU usage."
+
+[[tasks]]
 name = "code"
 command = """
 set -euo pipefail

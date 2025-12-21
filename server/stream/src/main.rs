@@ -48,6 +48,12 @@ struct Config {
     delete_after_upload: bool,
     /// ffmpeg path
     ffmpeg_path: PathBuf,
+    /// YouTube RTMP URL (rtmp://a.rtmp.youtube.com/live2)
+    youtube_rtmp_url: String,
+    /// YouTube stream key
+    youtube_stream_key: String,
+    /// Enable YouTube streaming
+    youtube_enabled: bool,
 }
 
 impl Default for Config {
@@ -61,6 +67,9 @@ impl Default for Config {
             api_port: 8080,
             delete_after_upload: true,
             ffmpeg_path: PathBuf::from("ffmpeg"),
+            youtube_rtmp_url: "rtmp://a.rtmp.youtube.com/live2".into(),
+            youtube_stream_key: String::new(),
+            youtube_enabled: false,
         }
     }
 }
@@ -166,6 +175,16 @@ fn load_config() -> Result<Config> {
     if let Ok(path) = std::env::var("FFMPEG_PATH") {
         config.ffmpeg_path = PathBuf::from(path);
     }
+    if let Ok(url) = std::env::var("YOUTUBE_RTMP_URL") {
+        config.youtube_rtmp_url = url;
+    }
+    if let Ok(key) = std::env::var("YOUTUBE_STREAM_KEY") {
+        config.youtube_stream_key = key;
+        config.youtube_enabled = true;
+    }
+    if let Ok(enabled) = std::env::var("YOUTUBE_ENABLED") {
+        config.youtube_enabled = enabled == "true" || enabled == "1";
+    }
 
     Ok(config)
 }
@@ -217,13 +236,24 @@ async fn start_receiver_internal(state: &AppState) -> Result<()> {
         return Ok(());
     }
 
-    let handle = receiver::start(
-        &state.config.ffmpeg_path,
-        state.config.srt_port,
-        &state.config.segment_dir,
-        state.config.segment_duration,
-    )
-    .await?;
+    let handle = if state.config.youtube_enabled && !state.config.youtube_stream_key.is_empty() {
+        info!("Starting YouTube streaming mode");
+        receiver::start_youtube(
+            &state.config.ffmpeg_path,
+            state.config.srt_port,
+            &state.config.youtube_rtmp_url,
+            &state.config.youtube_stream_key,
+        )
+        .await?
+    } else {
+        receiver::start(
+            &state.config.ffmpeg_path,
+            state.config.srt_port,
+            &state.config.segment_dir,
+            state.config.segment_duration,
+        )
+        .await?
+    };
 
     *receiver_guard = Some(handle);
     state.stats.write().await.receiving = true;
@@ -251,6 +281,12 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         receiving: receiver.is_some(),
         srt_port: state.config.srt_port,
         s3_bucket: state.config.s3_bucket.clone(),
+        youtube_enabled: state.config.youtube_enabled,
+        youtube_rtmp_url: if state.config.youtube_enabled {
+            Some(state.config.youtube_rtmp_url.clone())
+        } else {
+            None
+        },
         segments_uploaded: stats.segments_uploaded,
         bytes_uploaded: stats.bytes_uploaded,
         bytes_uploaded_human: human_bytes(stats.bytes_uploaded),
@@ -264,6 +300,8 @@ struct StatusResponse {
     receiving: bool,
     srt_port: u16,
     s3_bucket: String,
+    youtube_enabled: bool,
+    youtube_rtmp_url: Option<String>,
     segments_uploaded: u64,
     bytes_uploaded: u64,
     bytes_uploaded_human: String,

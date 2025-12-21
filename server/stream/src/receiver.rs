@@ -74,3 +74,156 @@ pub async fn start(
 
     Ok(ReceiverHandle { child })
 }
+
+/// Start ffmpeg to receive SRT stream and forward to YouTube RTMP.
+///
+/// Receives hardware-encoded H.264 from Mac, applies optional filters,
+/// and streams directly to YouTube with minimal re-encoding.
+pub async fn start_youtube(
+    ffmpeg_path: &Path,
+    srt_port: u16,
+    rtmp_url: &str,
+    stream_key: &str,
+) -> Result<ReceiverHandle> {
+    let srt_url = format!("srt://0.0.0.0:{srt_port}?mode=listener");
+    let youtube_url = format!("{}/{}", rtmp_url, stream_key);
+
+    // ffmpeg command for YouTube streaming:
+    // - Receive SRT input (already H.264 from Mac hardware encoder)
+    // - Copy video if already H.264, or re-encode if filtering needed
+    // - Ensure audio is AAC (YouTube requirement)
+    // - Output to RTMP
+    let mut cmd = Command::new(ffmpeg_path);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        // Reconnect on errors
+        "-reconnect",
+        "1",
+        "-reconnect_streamed",
+        "1",
+        "-reconnect_delay_max",
+        "5",
+        // Input from SRT
+        "-i",
+        &srt_url,
+        // Video: copy if already H.264 (from Mac VideoToolbox)
+        "-c:v",
+        "copy",
+        // Audio: ensure AAC for YouTube
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        "44100",
+        // FLV container for RTMP
+        "-f",
+        "flv",
+        // Buffer settings for stable streaming
+        "-flvflags",
+        "no_duration_filesize",
+        "-max_muxing_queue_size",
+        "1024",
+        // Output to YouTube
+        &youtube_url,
+    ]);
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    info!("Starting YouTube stream to {}", rtmp_url);
+
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("spawn ffmpeg at {}", ffmpeg_path.display()))?;
+
+    Ok(ReceiverHandle { child })
+}
+
+/// Start ffmpeg to receive SRT, apply filters, and stream to YouTube.
+///
+/// This variant decodes, applies filters, and re-encodes.
+/// Use when you need video processing on the Linux side.
+pub async fn start_youtube_with_filter(
+    ffmpeg_path: &Path,
+    srt_port: u16,
+    rtmp_url: &str,
+    stream_key: &str,
+    video_filter: Option<&str>,
+) -> Result<ReceiverHandle> {
+    let srt_url = format!("srt://0.0.0.0:{srt_port}?mode=listener");
+    let youtube_url = format!("{}/{}", rtmp_url, stream_key);
+
+    let mut cmd = Command::new(ffmpeg_path);
+    let mut args = vec![
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "warning".to_string(),
+        "-reconnect".to_string(),
+        "1".to_string(),
+        "-reconnect_streamed".to_string(),
+        "1".to_string(),
+        "-reconnect_delay_max".to_string(),
+        "5".to_string(),
+        "-i".to_string(),
+        srt_url,
+    ];
+
+    // Add video filter if specified
+    if let Some(filter) = video_filter {
+        args.extend(["-vf".to_string(), filter.to_string()]);
+    }
+
+    // Video encoding (x264 with fast preset for low latency)
+    args.extend([
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-preset".to_string(),
+        "veryfast".to_string(),
+        "-tune".to_string(),
+        "zerolatency".to_string(),
+        "-b:v".to_string(),
+        "4500k".to_string(),
+        "-maxrate".to_string(),
+        "4500k".to_string(),
+        "-bufsize".to_string(),
+        "9000k".to_string(),
+        "-g".to_string(),
+        "60".to_string(), // Keyframe every 2s at 30fps
+    ]);
+
+    // Audio
+    args.extend([
+        "-c:a".to_string(),
+        "aac".to_string(),
+        "-b:a".to_string(),
+        "128k".to_string(),
+        "-ar".to_string(),
+        "44100".to_string(),
+    ]);
+
+    // Output
+    args.extend([
+        "-f".to_string(),
+        "flv".to_string(),
+        "-flvflags".to_string(),
+        "no_duration_filesize".to_string(),
+        youtube_url,
+    ]);
+
+    cmd.args(&args);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    info!("Starting YouTube stream with filter");
+
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("spawn ffmpeg at {}", ffmpeg_path.display()))?;
+
+    Ok(ReceiverHandle { child })
+}
