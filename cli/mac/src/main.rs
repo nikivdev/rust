@@ -46,6 +46,32 @@ fn try_main() -> Result<()> {
                 list_energy(limit, &kill, force)
             }
         }
+        Commands::Cpu {
+            limit,
+            window_secs,
+            interval_secs,
+            threshold,
+            show_system,
+            tui,
+        } => {
+            if tui {
+                run_cpu_tui(
+                    limit,
+                    window_secs,
+                    interval_secs,
+                    threshold,
+                    show_system,
+                )
+            } else {
+                list_cpu(
+                    limit,
+                    window_secs,
+                    interval_secs,
+                    threshold,
+                    show_system,
+                )
+            }
+        }
         Commands::Warp(cmd) => match cmd {
             WarpCommands::Title => warp_title(),
         },
@@ -91,6 +117,27 @@ enum Commands {
         /// Use SIGKILL instead of SIGTERM
         #[arg(long)]
         force: bool,
+        /// Show a live-updating TUI
+        #[arg(long)]
+        tui: bool,
+    },
+    /// Robust CPU profiler (filters out system processes)
+    Cpu {
+        /// Limit number of processes shown (default: 20)
+        #[arg(long, short)]
+        limit: Option<usize>,
+        /// Rolling average window in seconds (default: 10)
+        #[arg(long, default_value_t = 10)]
+        window_secs: u64,
+        /// Sample interval in seconds (default: 1)
+        #[arg(long, default_value_t = 1)]
+        interval_secs: u64,
+        /// Minimum average CPU % to show (default: 2.0)
+        #[arg(long, default_value_t = 2.0)]
+        threshold: f64,
+        /// Include system processes in output
+        #[arg(long)]
+        show_system: bool,
         /// Show a live-updating TUI
         #[arg(long)]
         tui: bool,
@@ -905,6 +952,145 @@ fn list_energy(limit: Option<usize>, kill: &[u32], force: bool) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct ProcessCpu {
+    name: String,
+    pid: u32,
+    avg_cpu_percent: f64,
+    samples: u32,
+}
+
+fn list_cpu(
+    limit: Option<usize>,
+    window_secs: u64,
+    interval_secs: u64,
+    threshold: f64,
+    show_system: bool,
+) -> Result<()> {
+    let limit = limit.unwrap_or(20);
+    let mut processes = fetch_cpu(window_secs, interval_secs, threshold, show_system)?;
+
+    if processes.is_empty() {
+        println!("No processes above threshold.");
+        return Ok(());
+    }
+
+    let total = processes.len();
+    processes.truncate(limit);
+
+    println!(
+        "Top CPU offenders (avg {}s, showing {}/{}):\n",
+        window_secs,
+        processes.len(),
+        total
+    );
+    println!("{:<8} {:>8}  {:>7}  {}", "PID", "AVG %", "SAMPLES", "PROCESS");
+    println!("{}", "-".repeat(60));
+
+    for p in &processes {
+        println!(
+            "{:<8} {:>7.1}%  {:>7}  {}",
+            p.pid, p.avg_cpu_percent, p.samples, p.name
+        );
+    }
+
+    Ok(())
+}
+
+fn run_cpu_tui(
+    limit: Option<usize>,
+    window_secs: u64,
+    interval_secs: u64,
+    threshold: f64,
+    show_system: bool,
+) -> Result<()> {
+    let limit = limit.unwrap_or(20);
+
+    enable_raw_mode().context("failed to enable raw mode")?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen).context("failed to enter alt screen")?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend).context("failed to create terminal")?;
+
+    struct TuiGuard;
+    impl Drop for TuiGuard {
+        fn drop(&mut self) {
+            let _ = disable_raw_mode();
+            let mut stdout = std::io::stdout();
+            let _ = execute!(stdout, LeaveAlternateScreen);
+        }
+    }
+    let _guard = TuiGuard;
+
+    loop {
+        let processes = fetch_cpu(window_secs, interval_secs, threshold, show_system)
+            .unwrap_or_default();
+
+        terminal
+            .draw(|f| {
+                let area = f.size();
+                let layout = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]);
+                let chunks = layout.split(area);
+
+                let rows = processes
+                    .iter()
+                    .take(limit)
+                    .map(|p| {
+                        Row::new(vec![
+                            p.pid.to_string(),
+                            format!("{:.1}", p.avg_cpu_percent),
+                            p.samples.to_string(),
+                            p.name.clone(),
+                        ])
+                    })
+                    .collect::<Vec<_>>();
+
+                let table = Table::new(
+                    rows,
+                    [
+                        Constraint::Length(8),
+                        Constraint::Length(8),
+                        Constraint::Length(9),
+                        Constraint::Min(10),
+                    ],
+                )
+                .header(
+                    Row::new(vec!["PID", "AVG %", "SAMPLES", "PROCESS"])
+                        .style(Style::default().add_modifier(Modifier::BOLD)),
+                )
+                .block(
+                    Block::default()
+                        .title(format!("CPU offenders (avg {}s)", window_secs))
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Plain),
+                );
+
+                f.render_widget(table, chunks[0]);
+
+                let footer = Block::default()
+                    .title("q: quit  r: refresh  (sampling...)")
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Plain);
+                f.render_widget(footer, chunks[1]);
+            })
+            .context("failed to draw UI")?;
+
+        if event::poll(std::time::Duration::from_millis(200))
+            .context("failed to poll events")?
+        {
+            if let Event::Key(key) = event::read().context("failed to read event")? {
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Char('r') => {}
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn fetch_energy() -> Result<Vec<ProcessEnergy>> {
     // Use top to get accurate CPU snapshot (samples for 1 second)
     // -l 2 means 2 samples, second one has actual CPU averages
@@ -1061,6 +1247,184 @@ fn run_energy_tui(limit: Option<usize>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn fetch_cpu(
+    window_secs: u64,
+    interval_secs: u64,
+    threshold: f64,
+    show_system: bool,
+) -> Result<Vec<ProcessCpu>> {
+    let interval_secs = interval_secs.max(1);
+    let window_secs = window_secs.max(interval_secs);
+    let samples = (window_secs / interval_secs).max(1) + 1;
+
+    let output = Command::new("top")
+        .args([
+            "-l",
+            &samples.to_string(),
+            "-s",
+            &interval_secs.to_string(),
+            "-n",
+            "100",
+            "-stats",
+            "pid,cpu,command",
+        ])
+        .output()
+        .context("failed to run top")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("top command failed: {}", stderr);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let samples = parse_top_samples(&stdout);
+
+    if samples.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let usable_samples = if samples.len() > 1 {
+        &samples[1..]
+    } else {
+        &samples[..]
+    };
+
+    let mut agg: std::collections::HashMap<u32, (String, f64, u32)> =
+        std::collections::HashMap::new();
+
+    for sample in usable_samples {
+        for (pid, (name, cpu)) in sample {
+            let entry = agg.entry(*pid).or_insert_with(|| (name.clone(), 0.0, 0));
+            entry.0 = name.clone();
+            entry.1 += *cpu;
+            entry.2 += 1;
+        }
+    }
+
+    let mut results: Vec<ProcessCpu> = agg
+        .into_iter()
+        .filter_map(|(pid, (name, total_cpu, count))| {
+            if count == 0 {
+                return None;
+            }
+            let avg = total_cpu / count as f64;
+            if avg < threshold {
+                return None;
+            }
+            if !show_system && is_system_process(&name) {
+                return None;
+            }
+            Some(ProcessCpu {
+                name,
+                pid,
+                avg_cpu_percent: avg,
+                samples: count,
+            })
+        })
+        .collect();
+
+    results.sort_by(|a, b| {
+        b.avg_cpu_percent
+            .partial_cmp(&a.avg_cpu_percent)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(results)
+}
+
+fn parse_top_samples(stdout: &str) -> Vec<std::collections::HashMap<u32, (String, f64)>> {
+    let mut samples: Vec<std::collections::HashMap<u32, (String, f64)>> = Vec::new();
+    let mut current: Option<std::collections::HashMap<u32, (String, f64)>> = None;
+
+    for line in stdout.lines() {
+        if line.contains("PID") && line.contains("CPU") && line.contains("COMMAND") {
+            if let Some(sample) = current.take() {
+                samples.push(sample);
+            }
+            current = Some(std::collections::HashMap::new());
+            continue;
+        }
+
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("Processes:") {
+            continue;
+        }
+
+        if let Some(sample) = current.as_mut() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                if let (Ok(pid), Ok(cpu)) = (parts[0].parse::<u32>(), parts[1].parse::<f64>())
+                {
+                    let name = parts[2..].join(" ");
+                    sample.insert(pid, (name, cpu));
+                }
+            }
+        }
+    }
+
+    if let Some(sample) = current.take() {
+        samples.push(sample);
+    }
+
+    samples
+}
+
+fn is_system_process(name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() {
+        return true;
+    }
+
+    matches!(
+        name,
+        "kernel_task"
+            | "launchd"
+            | "loginwindow"
+            | "WindowServer"
+            | "sysmond"
+            | "mds"
+            | "mdworker"
+            | "mdworker_shared"
+            | "mds_stores"
+            | "spotlightd"
+            | "powerd"
+            | "logd"
+            | "tccd"
+            | "trustd"
+            | "coreaudiod"
+            | "distnoted"
+            | "notifyd"
+            | "UserEventAgent"
+            | "cfprefsd"
+            | "opendirectoryd"
+            | "accountsd"
+            | "mobileassetd"
+            | "fseventsd"
+            | "analyticsd"
+            | "corespotlightd"
+            | "airportd"
+            | "bluetoothd"
+            | "taskgated"
+            | "securityd"
+            | "secd"
+            | "softwareupdated"
+            | "locationd"
+            | "sharingd"
+            | "nsurlsessiond"
+            | "cloudd"
+            | "cloudphotosd"
+            | "photolibraryd"
+            | "photoanalysisd"
+            | "bird"
+            | "assistantd"
+            | "mediaanalysisd"
+            | "fileproviderd"
+    ) || name.starts_with("/System/")
+        || name.starts_with("/usr/libexec/")
+        || name.starts_with("/usr/sbin/")
+        || name.starts_with("/sbin/")
 }
 
 fn kill_processes(pids: &[u32], force: bool) -> Result<()> {

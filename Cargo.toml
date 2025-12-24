@@ -16,6 +16,7 @@ members = [
     "cli/intent",
     "cli/move",
     "cli/snaps",
+    "cli/sync",
     "lib/linsa",
     "server/stream",
     # "lib/lin-rs",  # requires local outlines-core fork
