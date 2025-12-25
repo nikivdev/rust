@@ -32,6 +32,7 @@ Available tasks:
 - snaps [args...]        Run the Snaps CLI (snapshot apps and close them).
 - deploy-snaps           Build the Snaps CLI binary and install it to ~/bin/snaps.
 - deploy-sync            Build the Sync CLI binary and install it to ~/bin/sync.
+- deploy-unite           Build the Unite CLI binary and install it to ~/bin/unite.
 - deploy-mac-cpu         Build the macOS CLI (with cpu command) and install it to ~/bin/mac.
 - deploy-mac             Build the macOS CLI binary and install it to ~/bin/mac.
 - km [args...]           Run the Keyboard Maestro CLI (passes CLI args through).
@@ -605,6 +606,30 @@ chmod 755 "$bin_dir/$bin_name"
 echo "Installed CLI to $bin_dir/$bin_name"
 """
 description = "Build the Sync CLI binary and install it to ~/bin/sync."
+
+[[tasks]]
+name = "deploy-unite"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="unite"
+bin_name="unite"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/unite-cli.XXXXXX")"
+cp -R "$repo_root/cli/unite/." "$work_dir/"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$work_dir/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Unite CLI binary and install it to ~/bin/unite."
 
 [[tasks]]
 name = "km"
