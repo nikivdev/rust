@@ -1,0 +1,4 @@
+UPDATE_OID=ipAddressTable
+UPDATE_CONF=mib2c.mfd.conf
+UPDATE_MIB2C_OPTS=
+#UPDATE_NOPROBE=1

@@ -1,0 +1,5 @@
+{config,[]}.
+{event_handler,[]}.
+{ct_hooks,[]}.
+{ct_hooks_order,undefined}.
+{enable_builtin_hooks,undefined}.

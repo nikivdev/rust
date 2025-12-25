@@ -102,9 +102,14 @@ struct Entry {
 
 fn build_index(index_path: &Path, path_override: Option<&str>) -> Result<Index> {
     let commands = scan_path(path_override)?;
+    let total = commands.len();
     let mut entries = Vec::new();
 
-    for (name, path) in commands {
+    eprint!("Indexing {} commands...", total);
+    for (i, (name, path)) in commands.iter().enumerate() {
+        if (i + 1) % 50 == 0 {
+            eprint!("\rIndexing {} commands... {}/{}", total, i + 1, total);
+        }
         let help = fetch_help(&path).unwrap_or_default();
         let help_hint = extract_help_hint(&help);
         let name_lc = name.to_lowercase();
@@ -133,6 +138,7 @@ fn build_index(index_path: &Path, path_override: Option<&str>) -> Result<Index> 
             });
         }
     }
+    eprintln!("\rIndexed {} commands, {} entries total.", total, entries.len());
 
     let index = Index {
         version: 1,
@@ -238,8 +244,8 @@ fn extract_help_hint(help: &str) -> Option<String> {
         if line.to_lowercase().starts_with("usage:") {
             continue;
         }
-        if line.len() > 100 {
-            return Some(line[..100].to_string());
+        if line.chars().count() > 100 {
+            return Some(line.chars().take(100).collect());
         }
         return Some(line.to_string());
     }
