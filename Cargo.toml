@@ -18,8 +18,9 @@ members = [
     "cli/snaps",
     "cli/sync",
     "cli/unite",
+    "cli/checkpoint",
     "lib/linsa",
-    "server/stream",
+    # "server/stream",  # removed
     # "lib/lin-rs",  # requires local outlines-core fork
 ]
 resolver = "2"

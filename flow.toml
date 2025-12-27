@@ -978,6 +978,28 @@ cargo run --manifest-path "$repo_root/cli/intent/Cargo.toml" -- "$@"
 description = "Run the Intent CLI (context-aware action daemon)."
 
 [[tasks]]
+name = "deploy-checkpoint"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="checkpoint"
+bin_name="checkpoint"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/checkpoint/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Checkpoint CLI binary and install it to ~/bin/checkpoint."
+
+[[tasks]]
 name = "commitWithCheck"
 command = """
 set -euo pipefail
