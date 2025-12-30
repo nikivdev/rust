@@ -31,3 +31,4 @@ lib/log_macro
 .cargo_home
 .ai/
 cvelist-our-html
+ct_run.*
