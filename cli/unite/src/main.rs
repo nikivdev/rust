@@ -18,6 +18,10 @@ fn main() {
 fn try_main() -> Result<()> {
     let cli = Cli::parse();
 
+    if cli.doc_update {
+        return generate_docs(cli.path.as_deref());
+    }
+
     let index_path = cli.index_path.unwrap_or_else(default_index_path);
     let index = if cli.refresh || !index_path.exists() {
         build_index(&index_path, cli.path.as_deref())?
@@ -83,6 +87,9 @@ struct Cli {
     /// Override PATH used for scanning
     #[arg(long)]
     path: Option<String>,
+    /// Generate markdown docs for all commands in PATH
+    #[arg(long)]
+    doc_update: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -209,6 +216,7 @@ fn is_executable(path: &Path) -> bool {
 fn fetch_help(path: &Path) -> Result<String> {
     let mut child = Command::new(path)
         .arg("--help")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -375,4 +383,113 @@ fn now_epoch_sec() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn generate_docs(path_override: Option<&str>) -> Result<()> {
+    let commands = scan_path(path_override)?;
+    let total = commands.len();
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let doc_path = PathBuf::from(&home).join(".db").join("unite").join("commands.md");
+
+    if let Some(parent) = doc_path.parent() {
+        fs::create_dir_all(parent).context("failed to create doc directory")?;
+    }
+
+    let mut output = String::new();
+    output.push_str("# Commands\n\n");
+    output.push_str(&format!("Generated: {}\n\n", chrono_date()));
+    output.push_str(&format!("Total commands: {}\n\n", total));
+    output.push_str("---\n\n");
+
+    eprint!("Generating docs for {} commands...", total);
+    for (i, (name, path)) in commands.iter().enumerate() {
+        if (i + 1) % 50 == 0 {
+            eprint!("\rGenerating docs for {} commands... {}/{}", total, i + 1, total);
+        }
+
+        let help = fetch_help(path).unwrap_or_default();
+
+        output.push_str(&format!("## {}\n\n", name));
+        output.push_str(&format!("**Path:** `{}`\n\n", path.display()));
+
+        if help.is_empty() {
+            output.push_str("*No help output available*\n\n");
+        } else {
+            output.push_str("```\n");
+            // Limit help to first 100 lines to keep file manageable
+            let help_lines: Vec<&str> = help.lines().take(100).collect();
+            output.push_str(&help_lines.join("\n"));
+            if help.lines().count() > 100 {
+                output.push_str("\n... (truncated)");
+            }
+            output.push_str("\n```\n\n");
+        }
+
+        output.push_str("---\n\n");
+    }
+    eprintln!("\rGenerated docs for {} commands.", total);
+
+    fs::write(&doc_path, &output).context("failed to write docs")?;
+    println!("Wrote {} to {}", byte_size(output.len()), doc_path.display());
+
+    Ok(())
+}
+
+fn chrono_date() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let secs_per_day = 86400;
+    let days_since_epoch = now / secs_per_day;
+    let (year, month, day) = days_to_ymd(days_since_epoch);
+    format!("{:04}-{:02}-{:02}", year, month, day)
+}
+
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    let mut remaining = days;
+    let mut year = 1970u64;
+
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if remaining < days_in_year {
+            break;
+        }
+        remaining -= days_in_year;
+        year += 1;
+    }
+
+    let days_in_months: [u64; 12] = if is_leap_year(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1u64;
+    for days_in_month in days_in_months.iter() {
+        if remaining < *days_in_month {
+            break;
+        }
+        remaining -= *days_in_month;
+        month += 1;
+    }
+
+    (year, month, remaining + 1)
+}
+
+fn is_leap_year(year: u64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+fn byte_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
 }

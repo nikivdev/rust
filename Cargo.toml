@@ -19,6 +19,7 @@ members = [
     "cli/sync",
     "cli/unite",
     "cli/checkpoint",
+    "cli/uptodate",
     "lib/linsa",
     # "server/stream",  # removed
     # "lib/lin-rs",  # requires local outlines-core fork

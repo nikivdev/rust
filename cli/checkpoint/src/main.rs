@@ -72,8 +72,87 @@ fn checkpoint_dir() -> PathBuf {
     PathBuf::from(home).join(".checkpoints")
 }
 
+fn app_checkpoint_dir(app: &str) -> PathBuf {
+    checkpoint_dir().join(app)
+}
+
 fn checkpoint_path(app: &str) -> PathBuf {
-    checkpoint_dir().join(format!("{}.json", app))
+    let timestamp = chrono_timestamp();
+    app_checkpoint_dir(app).join(format!("{}.json", timestamp))
+}
+
+fn latest_checkpoint_path(app: &str) -> Option<PathBuf> {
+    let dir = app_checkpoint_dir(app);
+    if !dir.exists() {
+        return None;
+    }
+    let mut entries: Vec<_> = fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().extension().map(|ext| ext == "json").unwrap_or(false))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    entries.last().map(|e| e.path())
+}
+
+fn chrono_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Format: YYYY-MM-DD_HH-MM-SS
+    let secs_per_day = 86400;
+    let secs_per_hour = 3600;
+    let secs_per_min = 60;
+
+    // Simple date calculation (not accounting for leap seconds, but good enough)
+    let days_since_epoch = now / secs_per_day;
+    let time_of_day = now % secs_per_day;
+
+    let hours = time_of_day / secs_per_hour;
+    let minutes = (time_of_day % secs_per_hour) / secs_per_min;
+    let seconds = time_of_day % secs_per_min;
+
+    // Calculate year/month/day from days since epoch (1970-01-01)
+    let (year, month, day) = days_to_ymd(days_since_epoch);
+
+    format!("{:04}-{:02}-{:02}_{:02}-{:02}-{:02}", year, month, day, hours, minutes, seconds)
+}
+
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    let mut remaining = days;
+    let mut year = 1970u64;
+
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if remaining < days_in_year {
+            break;
+        }
+        remaining -= days_in_year;
+        year += 1;
+    }
+
+    let days_in_months: [u64; 12] = if is_leap_year(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1u64;
+    for days_in_month in days_in_months.iter() {
+        if remaining < *days_in_month {
+            break;
+        }
+        remaining -= *days_in_month;
+        month += 1;
+    }
+
+    (year, month, remaining + 1)
+}
+
+fn is_leap_year(year: u64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 fn save_checkpoint(app: &str) -> Result<()> {
@@ -94,13 +173,14 @@ fn save_checkpoint(app: &str) -> Result<()> {
         sessions,
     };
 
-    let dir = checkpoint_dir();
+    let dir = app_checkpoint_dir(app);
     fs::create_dir_all(&dir).context("failed to create checkpoint directory")?;
 
+    let path = checkpoint_path(app);
     let json = serde_json::to_string_pretty(&checkpoint)?;
-    fs::write(checkpoint_path(app), json)?;
+    fs::write(&path, json)?;
 
-    println!("Saved {} sessions for {}", checkpoint.sessions.len(), app);
+    println!("Saved {} sessions for {} -> {}", checkpoint.sessions.len(), app, path.file_name().unwrap().to_string_lossy());
     for session in &checkpoint.sessions {
         println!("  {}", session.working_dir.display());
     }
@@ -109,10 +189,8 @@ fn save_checkpoint(app: &str) -> Result<()> {
 }
 
 fn restore_checkpoint(app: &str) -> Result<()> {
-    let path = checkpoint_path(app);
-    if !path.exists() {
-        anyhow::bail!("No checkpoint found for {}", app);
-    }
+    let path = latest_checkpoint_path(app)
+        .ok_or_else(|| anyhow::anyhow!("No checkpoint found for {}", app))?;
 
     let data = fs::read_to_string(&path)?;
     let checkpoint: Checkpoint = serde_json::from_str(&data)?;
@@ -123,7 +201,7 @@ fn restore_checkpoint(app: &str) -> Result<()> {
         _ => anyhow::bail!("Unknown app: {}", app),
     }
 
-    println!("Restored {} sessions for {}", checkpoint.sessions.len(), app);
+    println!("Restored {} sessions for {} from {}", checkpoint.sessions.len(), app, path.file_name().unwrap().to_string_lossy());
     Ok(())
 }
 
@@ -139,15 +217,15 @@ fn list_checkpoints() -> Result<()> {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().map(|e| e == "json").unwrap_or(false) {
-            if let Ok(data) = fs::read_to_string(&path) {
-                if let Ok(checkpoint) = serde_json::from_str::<Checkpoint>(&data) {
+        if path.is_dir() {
+            let app_name = path.file_name().unwrap().to_string_lossy();
+            if let Ok(files) = fs::read_dir(&path) {
+                let count = files.flatten().filter(|f| {
+                    f.path().extension().map(|e| e == "json").unwrap_or(false)
+                }).count();
+                if count > 0 {
                     found = true;
-                    println!(
-                        "{}: {} sessions",
-                        checkpoint.app,
-                        checkpoint.sessions.len()
-                    );
+                    println!("{}: {} checkpoints", app_name, count);
                 }
             }
         }
@@ -161,17 +239,26 @@ fn list_checkpoints() -> Result<()> {
 }
 
 fn show_checkpoint(app: &str) -> Result<()> {
-    let path = checkpoint_path(app);
-    if !path.exists() {
-        anyhow::bail!("No checkpoint found for {}", app);
+    let dir = app_checkpoint_dir(app);
+    if !dir.exists() {
+        anyhow::bail!("No checkpoints found for {}", app);
     }
 
-    let data = fs::read_to_string(&path)?;
-    let checkpoint: Checkpoint = serde_json::from_str(&data)?;
+    let mut entries: Vec<_> = fs::read_dir(&dir)?
+        .flatten()
+        .filter(|e| e.path().extension().map(|ext| ext == "json").unwrap_or(false))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
 
-    println!("{} ({} sessions):", checkpoint.app, checkpoint.sessions.len());
-    for session in &checkpoint.sessions {
-        println!("  {}", session.working_dir.display());
+    println!("{} checkpoints for {}:", entries.len(), app);
+    for entry in entries {
+        let path = entry.path();
+        let name = path.file_name().unwrap().to_string_lossy();
+        if let Ok(data) = fs::read_to_string(&path) {
+            if let Ok(checkpoint) = serde_json::from_str::<Checkpoint>(&data) {
+                println!("  {} ({} sessions)", name, checkpoint.sessions.len());
+            }
+        }
     }
 
     Ok(())
@@ -250,34 +337,59 @@ end tell
         .context("failed to run osascript")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let home = std::env::var("HOME").unwrap_or_default();
     let mut sessions = Vec::new();
+    let mut seen = HashSet::new();
 
-    // Zed window titles are like "project_name — Zed" or contain path info
+    // Zed window titles are like "folder — file.ext" or just "folder"
     for name in stdout.split(", ") {
         let name = name.trim();
         if name.is_empty() {
             continue;
         }
-        // Try to extract project path from window title
-        // Format is usually "folder_name — Zed" or "folder_name — file.rs — Zed"
-        if let Some(folder) = name.split(" — ").next() {
-            let folder = folder.trim();
-            // Try common locations
-            for base in &[
-                std::env::var("HOME").unwrap_or_default(),
-                format!("{}/src", std::env::var("HOME").unwrap_or_default()),
-                format!("{}/org", std::env::var("HOME").unwrap_or_default()),
-                format!("{}/lang", std::env::var("HOME").unwrap_or_default()),
-            ] {
-                let path = PathBuf::from(base).join(folder);
-                if path.exists() && path.is_dir() {
+        // Extract folder name (first part before " — ")
+        let folder = name.split(" — ").next().unwrap_or(name).trim();
+        if folder.is_empty() {
+            continue;
+        }
+
+        // Search common locations with depth
+        let search_bases = [
+            home.clone(),
+            format!("{}/org", home),
+            format!("{}/src", home),
+            format!("{}/lang", home),
+            format!("{}/gh", home),
+            format!("{}/fork-i", home),
+            format!("{}/x", home),
+            format!("{}/try", home),
+        ];
+
+        'outer: for base in &search_bases {
+            // Direct match
+            let path = PathBuf::from(base).join(folder);
+            if path.exists() && path.is_dir() {
+                if seen.insert(path.clone()) {
                     sessions.push(Session { working_dir: path });
-                    break;
+                }
+                break 'outer;
+            }
+            // One level deep (e.g., ~/org/1f for "1f")
+            if let Ok(entries) = std::fs::read_dir(base) {
+                for entry in entries.flatten() {
+                    let subpath = entry.path().join(folder);
+                    if subpath.exists() && subpath.is_dir() {
+                        if seen.insert(subpath.clone()) {
+                            sessions.push(Session { working_dir: subpath });
+                        }
+                        break 'outer;
+                    }
                 }
             }
         }
     }
 
+    sessions.sort_by(|a, b| a.working_dir.cmp(&b.working_dir));
     Ok(sessions)
 }
 
