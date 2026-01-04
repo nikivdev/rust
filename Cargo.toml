@@ -20,6 +20,7 @@ members = [
     "cli/unite",
     "cli/checkpoint",
     "cli/uptodate",
+    "cli/cmd",
     "lib/linsa",
     # "server/stream",  # removed
     # "lib/lin-rs",  # requires local outlines-core fork

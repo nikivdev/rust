@@ -352,6 +352,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm 0.28.1",
+ "dirs 6.0.0",
+ "nucleo-matcher",
+ "ratatui 0.29.0",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cocoa"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -419,6 +434,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "compact_str"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b79c4069c6cad78e2e0cdfcbd26275770669fb39fd308a752dc110e83b9af32"
+dependencies = [
+ "castaway",
+ "cfg-if",
+ "itoa",
+ "rustversion",
+ "ryu",
+ "static_assertions",
+]
+
+[[package]]
 name = "console"
 version = "0.15.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -427,7 +456,7 @@ dependencies = [
  "encode_unicode",
  "libc",
  "once_cell",
- "unicode-width 0.2.2",
+ "unicode-width 0.2.0",
  "windows-sys 0.59.0",
 ]
 
@@ -556,6 +585,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossterm"
+version = "0.28.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "829d955a0bb380ef178a640b91779e3987da38c9aea133b20614cfed8cdea9c6"
+dependencies = [
+ "bitflags 2.10.0",
+ "crossterm_winapi",
+ "mio 1.1.1",
+ "parking_lot",
+ "rustix 0.38.44",
+ "signal-hook",
+ "signal-hook-mio",
+ "winapi",
+]
+
+[[package]]
 name = "crossterm_winapi"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -639,7 +684,16 @@ version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
 dependencies = [
- "dirs-sys",
+ "dirs-sys 0.4.1",
+]
+
+[[package]]
+name = "dirs"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
+dependencies = [
+ "dirs-sys 0.5.0",
 ]
 
 [[package]]
@@ -650,8 +704,20 @@ checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
 dependencies = [
  "libc",
  "option-ext",
- "redox_users",
+ "redox_users 0.4.6",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users 0.5.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1322,6 +1388,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "indoc"
+version = "2.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79cf5c93f93228cf8efb3ba362535fb11199ac548a09ce117c9b1adc3030d706"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "inotify"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1342,13 +1417,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "instability"
+version = "0.3.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357b7205c6cd18dd2c86ed312d1e70add149aea98e7ef72b9fdf0270e555c11d"
+dependencies = [
+ "darling",
+ "indoc",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "intent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "dirs",
+ "dirs 5.0.1",
  "regex",
  "serde",
  "serde_json",
@@ -1576,9 +1664,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "crossterm",
+ "crossterm 0.27.0",
  "plist",
- "ratatui",
+ "ratatui 0.26.3",
  "serde",
 ]
 
@@ -1640,6 +1728,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a69bcab0ad47271a0234d9422b131806bf3968021e5dc9328caf2d4cd58557fc"
 dependencies = [
  "libc",
+ "log",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -1709,6 +1798,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nucleo-matcher"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf33f538733d1a5a3494b836ba913207f14d9d4a1d3cd67030c5061bdd2cac85"
+dependencies = [
+ "memchr",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -1841,7 +1940,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "dirs",
+ "dirs 5.0.1",
  "notify",
  "serde",
  "serde_json",
@@ -2090,8 +2189,8 @@ checksum = "f44c9e68fd46eda15c646fbb85e1040b657a58cdc8c98db1d97a55930d991eef"
 dependencies = [
  "bitflags 2.10.0",
  "cassowary",
- "compact_str",
- "crossterm",
+ "compact_str 0.7.1",
+ "crossterm 0.27.0",
  "itertools 0.12.1",
  "lru",
  "paste",
@@ -2100,6 +2199,27 @@ dependencies = [
  "unicode-segmentation",
  "unicode-truncate",
  "unicode-width 0.1.14",
+]
+
+[[package]]
+name = "ratatui"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eabd94c2f37801c20583fc49dd5cd6b0ba68c716787c2dd6ed18571e1e63117b"
+dependencies = [
+ "bitflags 2.10.0",
+ "cassowary",
+ "compact_str 0.8.1",
+ "crossterm 0.28.1",
+ "indoc",
+ "instability",
+ "itertools 0.13.0",
+ "lru",
+ "paste",
+ "strum",
+ "unicode-segmentation",
+ "unicode-truncate",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]
@@ -2140,6 +2260,17 @@ dependencies = [
  "getrandom 0.2.16",
  "libredox",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "redox_users"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
+dependencies = [
+ "getrandom 0.2.16",
+ "libredox",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -2542,6 +2673,7 @@ checksum = "b75a19a7a740b25bc7944bdee6172368f988763b744e3d4dfe753f6b4ece40cc"
 dependencies = [
  "libc",
  "mio 0.8.11",
+ "mio 1.1.1",
  "signal-hook",
 ]
 
@@ -3075,9 +3207,9 @@ checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
 name = "unicode-width"
-version = "0.2.2"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+checksum = "1fc81956842c57dac11422a97c3b8195a1ff727f06e85c84ed2e8aa277c9a0fd"
 
 [[package]]
 name = "unite"
