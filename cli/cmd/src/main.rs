@@ -648,7 +648,7 @@ fn run_fuzzy_ui(entries: Vec<Entry>) -> Result<Option<Entry>> {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(" Results (Enter to select, Esc to cancel) "),
+                        .title(" Results (Enter=run, Cmd+C=copy, Esc=cancel) "),
                 )
                 .highlight_style(
                     Style::default()
@@ -672,6 +672,25 @@ fn run_fuzzy_ui(entries: Vec<Entry>) -> Result<Option<Entry>> {
                         break;
                     }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        result = None;
+                        break;
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::SUPER) => {
+                        // Cmd+C: copy selected command to clipboard and exit
+                        if let Some(entry) = app.selected() {
+                            let cmd_str = entry.command.clone();
+                            // Copy to clipboard using pbcopy
+                            if let Ok(mut child) = Command::new("pbcopy")
+                                .stdin(Stdio::piped())
+                                .spawn()
+                            {
+                                if let Some(mut stdin) = child.stdin.take() {
+                                    use std::io::Write;
+                                    let _ = stdin.write_all(cmd_str.as_bytes());
+                                }
+                                let _ = child.wait();
+                            }
+                        }
                         result = None;
                         break;
                     }
