@@ -63,6 +63,19 @@ enum Commands {
         #[arg(short, long, default_value = "3")]
         depth: usize,
     },
+    /// AI-powered command matching using local LM Studio
+    Ai {
+        /// The CLI command to query (e.g., flow, cargo, git)
+        command: String,
+
+        /// LM Studio API port
+        #[arg(long, default_value = "1234")]
+        port: u16,
+
+        /// Debounce delay in milliseconds
+        #[arg(long, default_value = "2000")]
+        debounce: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -483,6 +496,450 @@ fn collect_deep_help(command: &str, max_depth: usize) -> Result<String> {
     Ok(output)
 }
 
+/// Query LM Studio to match a natural language query to a command.
+fn query_lm_studio(
+    query: &str,
+    command: &str,
+    entries: &[Entry],
+    port: u16,
+) -> Result<String> {
+    // Build context from available commands
+    let commands_list: Vec<String> = entries
+        .iter()
+        .filter(|e| e.entry_type == "subcommand")
+        .map(|e| {
+            if !e.description.is_empty() {
+                format!("{} - {}", e.command, e.description)
+            } else {
+                e.command.clone()
+            }
+        })
+        .collect();
+
+    let commands_context = commands_list.join("\n");
+
+    let system_prompt = format!(
+        r#"You are a CLI command assistant. Given a natural language query, output ONLY the exact command to run.
+
+Available commands for `{command}`:
+{commands_context}
+
+Rules:
+1. Output ONLY the command, nothing else
+2. Include any necessary arguments based on the query
+3. If the query mentions specific values (files, names, etc), include them
+4. Use the most appropriate command from the list
+5. Do not explain, just output the command"#
+    );
+
+    let payload = serde_json::json!({
+        "model": "qwen3-8b",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 200,
+        "stream": false
+    });
+
+    let url = format!("http://localhost:{}/v1/chat/completions", port);
+
+    let response: serde_json::Value = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .send_json(&payload)
+        .context("Failed to connect to LM Studio")?
+        .into_json()
+        .context("Failed to parse LM Studio response")?;
+
+    let content = response["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    // Clean up: remove any markdown code blocks or thinking tags
+    let content = content
+        .trim_start_matches("```")
+        .trim_start_matches("bash")
+        .trim_start_matches("sh")
+        .trim_end_matches("```")
+        .trim();
+
+    // Remove <think>...</think> tags if present
+    let content = if let Some(start) = content.find("<think>") {
+        if let Some(end) = content.find("</think>") {
+            format!("{}{}", &content[..start], &content[end + 8..])
+        } else {
+            content.to_string()
+        }
+    } else {
+        content.to_string()
+    };
+
+    Ok(content.trim().to_string())
+}
+
+/// UI Mode - Search (fuzzy filter) or AI (natural language)
+#[derive(PartialEq, Clone, Copy)]
+enum UiMode {
+    Search,
+    Ai,
+}
+
+/// Result from the unified UI
+enum UiResult {
+    Entry(Entry),
+    Command(String),
+    Copied,
+    Cancelled,
+}
+
+/// Run the unified search/AI UI with Tab toggle between modes.
+fn run_unified_ui(
+    command: &str,
+    entries: Vec<Entry>,
+    port: u16,
+    debounce_ms: u64,
+    start_in_ai_mode: bool,
+) -> Result<Option<UiResult>> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Shared state
+    let mut input = String::new();
+    let mut cursor_pos: usize = 0;
+    let mut mode = if start_in_ai_mode { UiMode::Ai } else { UiMode::Search };
+
+    // Search mode state
+    let mut app = App::new(entries.clone());
+
+    // AI mode state
+    let mut ai_suggested_cmd = String::new();
+    let mut ai_cursor_pos: usize = 0;
+    let mut last_input_time = std::time::Instant::now();
+    let mut pending_query = false;
+    let mut ai_status = "Type your query (Tab=search mode)".to_string();
+    let mut ai_loading = false;
+    let mut edit_mode = false;
+
+    let result;
+
+    loop {
+        // Check for AI debounce timeout BEFORE drawing
+        if mode == UiMode::Ai && pending_query && !ai_loading {
+            if last_input_time.elapsed().as_millis() >= debounce_ms as u128 {
+                ai_loading = true;
+                ai_status = "Querying AI...".to_string();
+            }
+        }
+
+        terminal.draw(|f| {
+            match mode {
+                UiMode::Search => {
+                    let chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(3), Constraint::Min(1)])
+                        .split(f.area());
+
+                    // Input box
+                    let input_widget = Paragraph::new(app.input.as_str())
+                        .style(Style::default().fg(Color::Yellow))
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .title(format!(" Search ({} matches) [Tab=AI mode] ", app.filtered.len())),
+                        );
+                    f.render_widget(input_widget, chunks[0]);
+                    f.set_cursor_position((chunks[0].x + cursor_pos as u16 + 1, chunks[0].y + 1));
+
+                    // Results list
+                    let items: Vec<ListItem> = app
+                        .filtered
+                        .iter()
+                        .map(|(_, entry)| {
+                            let style = match entry.entry_type.as_str() {
+                                "subcommand" => Style::default().fg(Color::Cyan),
+                                _ => Style::default().fg(Color::White),
+                            };
+                            let text = entry.display_text();
+                            let max_len = chunks[1].width.saturating_sub(4) as usize;
+                            let display = if text.len() > max_len {
+                                format!("{}...", &text[..max_len.saturating_sub(3)])
+                            } else {
+                                text
+                            };
+                            ListItem::new(Line::from(vec![Span::styled(display, style)]))
+                        })
+                        .collect();
+
+                    let list = List::new(items)
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .title(" Results (Enter=run, Ctrl+O=copy, Esc=cancel) "),
+                        )
+                        .highlight_style(
+                            Style::default()
+                                .bg(Color::DarkGray)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                        .highlight_symbol("> ");
+                    f.render_stateful_widget(list, chunks[1], &mut app.list_state);
+                }
+                UiMode::Ai => {
+                    let chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(3), // Query input
+                            Constraint::Length(3), // Suggested command
+                            Constraint::Min(1),    // Status
+                        ])
+                        .split(f.area());
+
+                    // Query/Edit input
+                    let (input_title, input_display, input_cursor, input_color) = if edit_mode {
+                        (
+                            " Edit Command (Enter=run, Esc=back) ",
+                            &ai_suggested_cmd,
+                            ai_cursor_pos,
+                            Color::Green,
+                        )
+                    } else {
+                        (
+                            " AI Query [Tab=search mode] ",
+                            &input,
+                            cursor_pos,
+                            Color::Yellow,
+                        )
+                    };
+                    let input_widget = Paragraph::new(input_display.as_str())
+                        .style(Style::default().fg(input_color))
+                        .block(Block::default().borders(Borders::ALL).title(input_title));
+                    f.render_widget(input_widget, chunks[0]);
+                    f.set_cursor_position((chunks[0].x + input_cursor as u16 + 1, chunks[0].y + 1));
+
+                    // Suggested command
+                    let (cmd_style, cmd_display) = if ai_loading {
+                        (Style::default().fg(Color::Yellow), "Loading...".to_string())
+                    } else if ai_suggested_cmd.is_empty() {
+                        (Style::default().fg(Color::DarkGray), "(waiting for query...)".to_string())
+                    } else {
+                        (Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD), ai_suggested_cmd.clone())
+                    };
+                    let cmd_widget = Paragraph::new(cmd_display)
+                        .style(cmd_style)
+                        .block(Block::default().borders(Borders::ALL).title(" Suggested Command "));
+                    f.render_widget(cmd_widget, chunks[1]);
+
+                    // Status
+                    let status_widget = Paragraph::new(ai_status.as_str())
+                        .style(Style::default().fg(Color::White))
+                        .block(Block::default().borders(Borders::ALL).title(" Status "));
+                    f.render_widget(status_widget, chunks[2]);
+                }
+            }
+        })?;
+
+        // Process AI query after drawing (so loading state shows)
+        if mode == UiMode::Ai && ai_loading {
+            ai_loading = false;
+            pending_query = false;
+
+            match query_lm_studio(&input, command, &entries, port) {
+                Ok(cmd) => {
+                    ai_suggested_cmd = cmd;
+                    ai_cursor_pos = ai_suggested_cmd.len();
+                    ai_status = "Ready. Enter=run, Ctrl+E=edit, Esc=cancel".to_string();
+                }
+                Err(e) => {
+                    ai_status = format!("Error: {}", e);
+                }
+            }
+        }
+
+        if event::poll(std::time::Duration::from_millis(50))? {
+            if let Event::Key(key) = event::read()? {
+                match mode {
+                    UiMode::Search => {
+                        match key.code {
+                            KeyCode::Esc => {
+                                result = Some(UiResult::Cancelled);
+                                break;
+                            }
+                            KeyCode::Enter => {
+                                if let Some(entry) = app.selected().cloned() {
+                                    result = Some(UiResult::Entry(entry));
+                                    break;
+                                }
+                            }
+                            KeyCode::Tab => {
+                                mode = UiMode::Ai;
+                                ai_status = "Type your query (Tab=search mode)".to_string();
+                            }
+                            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                result = Some(UiResult::Cancelled);
+                                break;
+                            }
+                            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Some(entry) = app.selected() {
+                                    let cmd_str = entry.display_text();
+                                    if let Ok(mut child) = Command::new("pbcopy")
+                                        .stdin(Stdio::piped())
+                                        .spawn()
+                                    {
+                                        if let Some(mut stdin) = child.stdin.take() {
+                                            use std::io::Write;
+                                            let _ = stdin.write_all(cmd_str.as_bytes());
+                                        }
+                                        let _ = child.wait();
+                                    }
+                                }
+                                result = Some(UiResult::Copied);
+                                break;
+                            }
+                            KeyCode::Up => app.move_selection(-1),
+                            KeyCode::Down => app.move_selection(1),
+                            KeyCode::PageUp => app.move_selection(-10),
+                            KeyCode::PageDown => app.move_selection(10),
+                            KeyCode::Left => {
+                                if cursor_pos > 0 {
+                                    cursor_pos -= 1;
+                                }
+                            }
+                            KeyCode::Right => {
+                                if cursor_pos < app.input.len() {
+                                    cursor_pos += 1;
+                                }
+                            }
+                            KeyCode::Char(c) => {
+                                app.input.insert(cursor_pos, c);
+                                cursor_pos += 1;
+                                app.update_filter();
+                            }
+                            KeyCode::Backspace => {
+                                if cursor_pos > 0 {
+                                    app.input.remove(cursor_pos - 1);
+                                    cursor_pos -= 1;
+                                    app.update_filter();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    UiMode::Ai => {
+                        if edit_mode {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    edit_mode = false;
+                                    ai_status = "Ready. Enter=run, Ctrl+E=edit, Esc=cancel".to_string();
+                                }
+                                KeyCode::Enter => {
+                                    if !ai_suggested_cmd.is_empty() {
+                                        result = Some(UiResult::Command(ai_suggested_cmd.clone()));
+                                        break;
+                                    }
+                                }
+                                KeyCode::Left => {
+                                    if ai_cursor_pos > 0 {
+                                        ai_cursor_pos -= 1;
+                                    }
+                                }
+                                KeyCode::Right => {
+                                    if ai_cursor_pos < ai_suggested_cmd.len() {
+                                        ai_cursor_pos += 1;
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    ai_suggested_cmd.insert(ai_cursor_pos, c);
+                                    ai_cursor_pos += 1;
+                                }
+                                KeyCode::Backspace => {
+                                    if ai_cursor_pos > 0 {
+                                        ai_suggested_cmd.remove(ai_cursor_pos - 1);
+                                        ai_cursor_pos -= 1;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    result = Some(UiResult::Cancelled);
+                                    break;
+                                }
+                                KeyCode::Enter => {
+                                    if !ai_suggested_cmd.is_empty() {
+                                        result = Some(UiResult::Command(ai_suggested_cmd.clone()));
+                                        break;
+                                    }
+                                }
+                                KeyCode::Tab => {
+                                    mode = UiMode::Search;
+                                }
+                                KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                    if !ai_suggested_cmd.is_empty() {
+                                        edit_mode = true;
+                                        ai_cursor_pos = ai_suggested_cmd.len();
+                                        ai_status = "Edit mode. Modify and press Enter.".to_string();
+                                    }
+                                }
+                                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                    result = Some(UiResult::Cancelled);
+                                    break;
+                                }
+                                KeyCode::Left => {
+                                    if cursor_pos > 0 {
+                                        cursor_pos -= 1;
+                                    }
+                                }
+                                KeyCode::Right => {
+                                    if cursor_pos < input.len() {
+                                        cursor_pos += 1;
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    input.insert(cursor_pos, c);
+                                    cursor_pos += 1;
+                                    last_input_time = std::time::Instant::now();
+                                    pending_query = true;
+                                    ai_status = "Typing... (will query after pause)".to_string();
+                                }
+                                KeyCode::Backspace => {
+                                    if cursor_pos > 0 {
+                                        input.remove(cursor_pos - 1);
+                                        cursor_pos -= 1;
+                                        if !input.is_empty() {
+                                            last_input_time = std::time::Instant::now();
+                                            pending_query = true;
+                                            ai_status = "Typing... (will query after pause)".to_string();
+                                        } else {
+                                            pending_query = false;
+                                            ai_suggested_cmd.clear();
+                                            ai_status = "Type your query (Tab=search mode)".to_string();
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Restore terminal
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+    Ok(result)
+}
+
 /// Try to get command info via --help-full (instant, no scanning needed).
 fn try_help_full(command: &str) -> Option<CommandInfo> {
     let output = Command::new(command)
@@ -669,142 +1126,6 @@ impl App {
     }
 }
 
-fn run_fuzzy_ui(entries: Vec<Entry>) -> Result<Option<Entry>> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let mut app = App::new(entries);
-    let result;
-
-    loop {
-        terminal.draw(|f| {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(3), Constraint::Min(1)])
-                .split(f.area());
-
-            // Input box
-            let input = Paragraph::new(app.input.as_str())
-                .style(Style::default().fg(Color::Yellow))
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(format!(" Search ({} matches) ", app.filtered.len())),
-                );
-            f.render_widget(input, chunks[0]);
-
-            // Set cursor
-            f.set_cursor_position((chunks[0].x + app.input.len() as u16 + 1, chunks[0].y + 1));
-
-            // Results list
-            let items: Vec<ListItem> = app
-                .filtered
-                .iter()
-                .map(|(_, entry)| {
-                    let style = match entry.entry_type.as_str() {
-                        "subcommand" => Style::default().fg(Color::Cyan),
-                        _ => Style::default().fg(Color::White),
-                    };
-
-                    let text = entry.display_text();
-                    // Truncate if too long
-                    let max_len = chunks[1].width.saturating_sub(4) as usize;
-                    let display = if text.len() > max_len {
-                        format!("{}...", &text[..max_len.saturating_sub(3)])
-                    } else {
-                        text
-                    };
-
-                    ListItem::new(Line::from(vec![Span::styled(display, style)]))
-                })
-                .collect();
-
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(" Results (Enter=run, Ctrl+O=copy, Esc=cancel) "),
-                )
-                .highlight_style(
-                    Style::default()
-                        .bg(Color::DarkGray)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .highlight_symbol("> ");
-
-            f.render_stateful_widget(list, chunks[1], &mut app.list_state);
-        })?;
-
-        if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Esc => {
-                        result = None;
-                        break;
-                    }
-                    KeyCode::Enter => {
-                        result = app.selected().cloned();
-                        break;
-                    }
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        result = None;
-                        break;
-                    }
-                    KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        // Ctrl+O: copy selected command + description to clipboard and exit
-                        if let Some(entry) = app.selected() {
-                            let cmd_str = entry.display_text();
-                            // Copy to clipboard using pbcopy
-                            if let Ok(mut child) = Command::new("pbcopy")
-                                .stdin(Stdio::piped())
-                                .spawn()
-                            {
-                                if let Some(mut stdin) = child.stdin.take() {
-                                    use std::io::Write;
-                                    let _ = stdin.write_all(cmd_str.as_bytes());
-                                }
-                                let _ = child.wait();
-                            }
-                        }
-                        result = None;
-                        break;
-                    }
-                    KeyCode::Up | KeyCode::BackTab => {
-                        app.move_selection(-1);
-                    }
-                    KeyCode::Down | KeyCode::Tab => {
-                        app.move_selection(1);
-                    }
-                    KeyCode::PageUp => {
-                        app.move_selection(-10);
-                    }
-                    KeyCode::PageDown => {
-                        app.move_selection(10);
-                    }
-                    KeyCode::Char(c) => {
-                        app.input.push(c);
-                        app.update_filter();
-                    }
-                    KeyCode::Backspace => {
-                        app.input.pop();
-                        app.update_filter();
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-
-    Ok(result)
-}
 
 fn build_command_string(entry: &Entry) -> String {
     match entry.entry_type.as_str() {
@@ -876,26 +1197,49 @@ fn run_search(command: &str, refresh: bool, print_only: bool, list: bool) -> Res
         return Ok(());
     }
 
-    let selected = run_fuzzy_ui(info.entries)?;
+    // Default LM Studio port and debounce
+    let port = 1234;
+    let debounce_ms = 2000;
 
-    if let Some(entry) = selected {
-        let cmd_str = build_command_string(&entry);
-        println!("{}", cmd_str);
+    let result = run_unified_ui(&resolved, info.entries, port, debounce_ms, false)?;
 
-        if !print_only {
-            // Execute the command interactively
-            let parts: Vec<&str> = cmd_str.split_whitespace().collect();
-            if !parts.is_empty() {
-                let status = Command::new(parts[0])
-                    .args(&parts[1..])
-                    .stdin(Stdio::inherit())
-                    .stdout(Stdio::inherit())
-                    .stderr(Stdio::inherit())
-                    .status()?;
+    match result {
+        Some(UiResult::Entry(entry)) => {
+            let cmd_str = build_command_string(&entry);
+            println!("{}", cmd_str);
 
-                std::process::exit(status.code().unwrap_or(1));
+            if !print_only {
+                let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+                if !parts.is_empty() {
+                    let status = Command::new(parts[0])
+                        .args(&parts[1..])
+                        .stdin(Stdio::inherit())
+                        .stdout(Stdio::inherit())
+                        .stderr(Stdio::inherit())
+                        .status()?;
+
+                    std::process::exit(status.code().unwrap_or(1));
+                }
             }
         }
+        Some(UiResult::Command(cmd_str)) => {
+            println!("{}", cmd_str);
+
+            if !print_only {
+                let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+                if !parts.is_empty() {
+                    let status = Command::new(parts[0])
+                        .args(&parts[1..])
+                        .stdin(Stdio::inherit())
+                        .stdout(Stdio::inherit())
+                        .stderr(Stdio::inherit())
+                        .status()?;
+
+                    std::process::exit(status.code().unwrap_or(1));
+                }
+            }
+        }
+        Some(UiResult::Copied) | Some(UiResult::Cancelled) | None => {}
     }
 
     Ok(())
@@ -935,6 +1279,55 @@ fn main() -> Result<()> {
 
                     child.wait()?;
                     eprintln!("Copied {} bytes to clipboard", help_output.len());
+                }
+            }
+            Commands::Ai {
+                command,
+                port,
+                debounce,
+            } => {
+                let resolved = resolve_command(&command)?;
+                let info = load_or_scan(&resolved, false)?;
+
+                if info.entries.is_empty() {
+                    anyhow::bail!("No commands found for {}", command);
+                }
+
+                let result = run_unified_ui(&resolved, info.entries, port, debounce, true)?;
+
+                match result {
+                    Some(UiResult::Entry(entry)) => {
+                        let cmd_str = build_command_string(&entry);
+                        println!("{}", cmd_str);
+
+                        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+                        if !parts.is_empty() {
+                            let status = Command::new(parts[0])
+                                .args(&parts[1..])
+                                .stdin(Stdio::inherit())
+                                .stdout(Stdio::inherit())
+                                .stderr(Stdio::inherit())
+                                .status()?;
+
+                            std::process::exit(status.code().unwrap_or(1));
+                        }
+                    }
+                    Some(UiResult::Command(cmd_str)) => {
+                        println!("{}", cmd_str);
+
+                        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+                        if !parts.is_empty() {
+                            let status = Command::new(parts[0])
+                                .args(&parts[1..])
+                                .stdin(Stdio::inherit())
+                                .stdout(Stdio::inherit())
+                                .stderr(Stdio::inherit())
+                                .status()?;
+
+                            std::process::exit(status.code().unwrap_or(1));
+                        }
+                    }
+                    Some(UiResult::Copied) | Some(UiResult::Cancelled) | None => {}
                 }
             }
         }

@@ -13,3 +13,4 @@ anyhow = "1"
 nucleo-matcher = "0.3"
 crossterm = "0.28"
 ratatui = "0.29"
+ureq = { version = "2", features = ["json"] }
