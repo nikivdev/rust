@@ -56,9 +56,7 @@ All library code is in `lib/` (currently git ignored as there is only one librar
 
 ## Contributing
 
-Make issues with bugs/features. Any PR to improve project is welcome. Ideally with **working** & **useful** patches but non finished ideas are great too. If idea/feature is sound, it will be merged eventually.
-
-[This](https://nikiv.dev/how-i-code) is nice overview of a coding workflow that works that you can adapt.
+Make issues with bugs/features or submit PRs. [flow](https://github.com/nikivdev/flow) has many utils to make this easy. PRs with ideas if they are great will eventually be merged. Bug fixing is always welcome, perf improvements should ideally have some benchmark attached. Docs can always be better. See [this](https://nikiv.dev/how-i-code) for how to code fast with AI.
 
 ### 🖤
 

@@ -29,8 +29,12 @@ use std::{
 #[derive(Parser)]
 #[command(name = "cmd", about = "Fuzzy search CLI commands and options")]
 struct Args {
-    /// The CLI command to scan (e.g., bun, cargo, git)
-    command: String,
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    /// The CLI command to search (e.g., bun, cargo, git)
+    #[arg(conflicts_with = "command")]
+    cli: Option<String>,
 
     /// Force rescan even if cache exists
     #[arg(short, long)]
@@ -43,6 +47,22 @@ struct Args {
     /// List all entries without interactive UI
     #[arg(short, long)]
     list: bool,
+}
+
+#[derive(clap::Subcommand)]
+enum Commands {
+    /// Deep expand --help for a CLI and all subcommands, copy to clipboard or file
+    Copy {
+        /// The CLI command to expand (e.g., flow, cargo, git)
+        command: String,
+
+        /// Output file path (optional, copies to clipboard if not provided)
+        path: Option<PathBuf>,
+
+        /// Max depth for subcommand recursion (default: 3)
+        #[arg(short, long, default_value = "3")]
+        depth: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -394,6 +414,75 @@ fn scan_command(command: &str, max_depth: usize) -> Result<Vec<Entry>> {
     Ok(all_entries)
 }
 
+/// Collect deep help output for a command and all subcommands
+fn collect_deep_help(command: &str, max_depth: usize) -> Result<String> {
+    let mut output = String::new();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    fn collect_recursive(
+        command: &str,
+        subcommands: &[String],
+        depth: usize,
+        max_depth: usize,
+        output: &mut String,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> Result<()> {
+        if depth > max_depth {
+            return Ok(());
+        }
+
+        let key = if subcommands.is_empty() {
+            command.to_string()
+        } else {
+            format!("{} {}", command, subcommands.join(" "))
+        };
+
+        if visited.contains(&key) {
+            return Ok(());
+        }
+        visited.insert(key.clone());
+
+        eprint!("\rCollecting: {}...", key);
+        io::stderr().flush().ok();
+
+        // Build the command with subcommands
+        let refs: Vec<&str> = subcommands.iter().map(|s| s.as_str()).collect();
+        let help_text = match get_help(command, &refs) {
+            Ok(text) => text,
+            Err(_) => return Ok(()), // Skip if help fails
+        };
+
+        // Add section header
+        let header = format!(
+            "\n{}\n## {} --help\n{}\n\n",
+            "=".repeat(80),
+            key,
+            "=".repeat(80)
+        );
+        output.push_str(&header);
+        output.push_str(&help_text);
+        output.push_str("\n");
+
+        // Parse to find subcommands
+        let entries = parse_help(command, &refs, &help_text);
+        let sub_names = extract_subcommand_names(&entries);
+
+        // Recursively collect subcommands
+        for sub_name in sub_names {
+            let mut new_subs = subcommands.to_vec();
+            new_subs.push(sub_name);
+            collect_recursive(command, &new_subs, depth + 1, max_depth, output, visited)?;
+        }
+
+        Ok(())
+    }
+
+    collect_recursive(command, &[], 0, max_depth, &mut output, &mut visited)?;
+    eprintln!("\rCollected help from {} commands.        ", visited.len());
+
+    Ok(output)
+}
+
 fn load_or_scan(command: &str, refresh: bool) -> Result<CommandInfo> {
     let cache_path = get_cache_path(command)?;
 
@@ -635,28 +724,22 @@ fn build_command_string(entry: &Entry) -> String {
     }
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
-
-    // Resolve command path
-    let command = if args.command.contains('/') {
-        args.command.clone()
-    } else {
-        // Just use the command name, let the shell find it
-        args.command.clone()
-    };
-
-    // Check command exists
+fn check_command_exists(command: &str) -> Result<()> {
     let which = Command::new("which")
-        .arg(&command)
+        .arg(command)
         .output()
         .context("Failed to find command")?;
 
     if !which.status.success() {
         anyhow::bail!("Command not found: {}", command);
     }
+    Ok(())
+}
 
-    let info = load_or_scan(&command, args.refresh)?;
+fn run_search(command: &str, refresh: bool, print_only: bool, list: bool) -> Result<()> {
+    check_command_exists(command)?;
+
+    let info = load_or_scan(command, refresh)?;
 
     if info.entries.is_empty() {
         eprintln!("No commands or flags found for {}", command);
@@ -664,7 +747,7 @@ fn main() -> Result<()> {
     }
 
     // List mode - just print all entries
-    if args.list {
+    if list {
         for entry in &info.entries {
             println!("{}", entry.display_text());
         }
@@ -677,7 +760,7 @@ fn main() -> Result<()> {
         let cmd_str = build_command_string(&entry);
         println!("{}", cmd_str);
 
-        if !args.print_only {
+        if !print_only {
             // Execute the command interactively
             let parts: Vec<&str> = cmd_str.split_whitespace().collect();
             if !parts.is_empty() {
@@ -691,6 +774,56 @@ fn main() -> Result<()> {
                 std::process::exit(status.code().unwrap_or(1));
             }
         }
+    }
+
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+
+    // Handle subcommands first
+    if let Some(cmd) = args.command {
+        match cmd {
+            Commands::Copy {
+                command,
+                path,
+                depth,
+            } => {
+                check_command_exists(&command)?;
+
+                eprintln!("Collecting deep help for '{}'...", command);
+                let help_output = collect_deep_help(&command, depth)?;
+
+                if let Some(path) = path {
+                    fs::write(&path, &help_output)
+                        .with_context(|| format!("Failed to write to {}", path.display()))?;
+                    eprintln!("Wrote {} bytes to {}", help_output.len(), path.display());
+                } else {
+                    // Copy to clipboard using pbcopy (macOS)
+                    let mut child = Command::new("pbcopy")
+                        .stdin(Stdio::piped())
+                        .spawn()
+                        .context("Failed to run pbcopy")?;
+
+                    if let Some(mut stdin) = child.stdin.take() {
+                        use std::io::Write;
+                        stdin.write_all(help_output.as_bytes())?;
+                    }
+
+                    child.wait()?;
+                    eprintln!("Copied {} bytes to clipboard", help_output.len());
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // Default: search mode
+    if let Some(cli) = args.cli {
+        run_search(&cli, args.refresh, args.print_only, args.list)?;
+    } else {
+        anyhow::bail!("Usage: cmd <CLI> or cmd copy <CLI> [PATH]");
     }
 
     Ok(())

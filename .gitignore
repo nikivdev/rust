@@ -30,9 +30,16 @@ private
 lib/log_macro
 .cargo_home
 .ai/
+# erlang/common test artifacts
 cvelist-our-html
 ct_run.*
+ct_default.css
 suite.log*.html
+all_runs.html
 /index.html
 /jquery*.js
+patcheck.tmp
+--help/
+
 variables-*
+.ai/internal/
