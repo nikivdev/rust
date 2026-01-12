@@ -483,14 +483,45 @@ fn collect_deep_help(command: &str, max_depth: usize) -> Result<String> {
     Ok(output)
 }
 
+/// Commands known to support --help-full (always instant, skip cache).
+const HELP_FULL_COMMANDS: &[&str] = &["f", "flow"];
+
+/// Try to get command info via --help-full (instant, no scanning needed).
+fn try_help_full(command: &str) -> Option<CommandInfo> {
+    let output = Command::new(command)
+        .arg("--help-full")
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(&stdout).ok()
+}
+
+/// Check if command is known to support --help-full.
+fn supports_help_full(command: &str) -> bool {
+    let base = command.rsplit('/').next().unwrap_or(command);
+    HELP_FULL_COMMANDS.contains(&base)
+}
+
 fn load_or_scan(command: &str, refresh: bool) -> Result<CommandInfo> {
+    // For known --help-full commands: always use it directly (instant, always fresh)
+    if supports_help_full(command) {
+        if let Some(info) = try_help_full(command) {
+            return Ok(info);
+        }
+    }
+
     let cache_path = get_cache_path(command)?;
 
+    // Check cache first (unless refresh requested)
     if !refresh && cache_path.exists() {
         let data = fs::read_to_string(&cache_path)?;
         let cached: CommandInfo = serde_json::from_str(&data)?;
 
-        // Check if version matches
         let current_version = get_version(command)?;
         if cached.version == current_version {
             eprintln!("Using cached data for {} ({})", command, current_version);
@@ -502,13 +533,24 @@ fn load_or_scan(command: &str, refresh: bool) -> Result<CommandInfo> {
         );
     }
 
+    // Try --help-full for unknown commands too (might support it)
+    if let Some(info) = try_help_full(command) {
+        eprintln!("Using --help-full for {} ({})", command, info.version);
+        let data = serde_json::to_string_pretty(&info)?;
+        fs::write(&cache_path, data)?;
+        return Ok(info);
+    }
+
+    // Fall back to scanning
     eprintln!("Scanning {}...", command);
-    let version = get_version(command)?;
-    let entries = scan_command(command, 3)?; // Max depth of 3
+    let current_version = get_version(command)?;
+    let entries = scan_command(command, 3)?;
 
-    let info = CommandInfo { version, entries };
+    let info = CommandInfo {
+        version: current_version,
+        entries,
+    };
 
-    // Save to cache
     let data = serde_json::to_string_pretty(&info)?;
     fs::write(&cache_path, data)?;
 
@@ -648,7 +690,7 @@ fn run_fuzzy_ui(entries: Vec<Entry>) -> Result<Option<Entry>> {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(" Results (Enter=run, Cmd+C=copy, Esc=cancel) "),
+                        .title(" Results (Enter=run, Ctrl+O=copy, Esc=cancel) "),
                 )
                 .highlight_style(
                     Style::default()
@@ -675,8 +717,8 @@ fn run_fuzzy_ui(entries: Vec<Entry>) -> Result<Option<Entry>> {
                         result = None;
                         break;
                     }
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::SUPER) => {
-                        // Cmd+C: copy selected command to clipboard and exit
+                    KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+O: copy selected command to clipboard and exit
                         if let Some(entry) = app.selected() {
                             let cmd_str = entry.command.clone();
                             // Copy to clipboard using pbcopy
