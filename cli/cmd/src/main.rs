@@ -483,9 +483,6 @@ fn collect_deep_help(command: &str, max_depth: usize) -> Result<String> {
     Ok(output)
 }
 
-/// Commands known to support --help-full (always instant, skip cache).
-const HELP_FULL_COMMANDS: &[&str] = &["f", "flow"];
-
 /// Try to get command info via --help-full (instant, no scanning needed).
 fn try_help_full(command: &str) -> Option<CommandInfo> {
     let output = Command::new(command)
@@ -501,14 +498,54 @@ fn try_help_full(command: &str) -> Option<CommandInfo> {
     serde_json::from_str(&stdout).ok()
 }
 
-/// Check if command is known to support --help-full.
+/// Get path to the help-full support cache file.
+fn get_help_full_cache_path() -> Result<PathBuf> {
+    Ok(get_cache_dir()?.join("help-full-commands.txt"))
+}
+
+/// Check if command is known to support --help-full (from cache).
 fn supports_help_full(command: &str) -> bool {
     let base = command.rsplit('/').next().unwrap_or(command);
-    HELP_FULL_COMMANDS.contains(&base)
+
+    let cache_path = match get_help_full_cache_path() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    if !cache_path.exists() {
+        return false;
+    }
+
+    fs::read_to_string(&cache_path)
+        .map(|content| content.lines().any(|line| line == base))
+        .unwrap_or(false)
+}
+
+/// Mark a command as supporting --help-full.
+fn mark_supports_help_full(command: &str) {
+    let base = command.rsplit('/').next().unwrap_or(command);
+
+    let cache_path = match get_help_full_cache_path() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    // Read existing, add if not present, write back
+    let mut commands: Vec<String> = cache_path
+        .exists()
+        .then(|| fs::read_to_string(&cache_path).ok())
+        .flatten()
+        .map(|c| c.lines().map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+
+    if !commands.iter().any(|c| c == base) {
+        commands.push(base.to_string());
+        let _ = fs::write(&cache_path, commands.join("\n"));
+    }
 }
 
 fn load_or_scan(command: &str, refresh: bool) -> Result<CommandInfo> {
-    // For known --help-full commands: always use it directly (instant, always fresh)
+    // Check if command is known to support --help-full
     if supports_help_full(command) {
         if let Some(info) = try_help_full(command) {
             return Ok(info);
@@ -517,7 +554,7 @@ fn load_or_scan(command: &str, refresh: bool) -> Result<CommandInfo> {
 
     let cache_path = get_cache_path(command)?;
 
-    // Check cache first (unless refresh requested)
+    // Check cache first
     if !refresh && cache_path.exists() {
         let data = fs::read_to_string(&cache_path)?;
         let cached: CommandInfo = serde_json::from_str(&data)?;
@@ -533,9 +570,9 @@ fn load_or_scan(command: &str, refresh: bool) -> Result<CommandInfo> {
         );
     }
 
-    // Try --help-full for unknown commands too (might support it)
+    // Before scanning, try --help-full once (discover new commands that support it)
     if let Some(info) = try_help_full(command) {
-        eprintln!("Using --help-full for {} ({})", command, info.version);
+        mark_supports_help_full(command);
         let data = serde_json::to_string_pretty(&info)?;
         fs::write(&cache_path, data)?;
         return Ok(info);
