@@ -71,10 +71,6 @@ enum Commands {
         /// LM Studio API port
         #[arg(long, default_value = "1234")]
         port: u16,
-
-        /// Debounce delay in milliseconds
-        #[arg(long, default_value = "2000")]
-        debounce: u64,
     },
 }
 
@@ -600,7 +596,6 @@ fn run_unified_ui(
     command: &str,
     entries: Vec<Entry>,
     port: u16,
-    debounce_ms: u64,
     start_in_ai_mode: bool,
 ) -> Result<Option<UiResult>> {
     enable_raw_mode()?;
@@ -621,23 +616,13 @@ fn run_unified_ui(
     // AI mode state
     let mut ai_suggested_cmd = String::new();
     let mut ai_cursor_pos: usize = 0;
-    let mut last_input_time = std::time::Instant::now();
-    let mut pending_query = false;
-    let mut ai_status = "Type your query (Tab=search mode)".to_string();
+    let mut ai_status = "Type query, Enter=ask AI (Tab=search mode)".to_string();
     let mut ai_loading = false;
     let mut edit_mode = false;
 
     let result;
 
     loop {
-        // Check for AI debounce timeout BEFORE drawing
-        if mode == UiMode::Ai && pending_query && !ai_loading {
-            if last_input_time.elapsed().as_millis() >= debounce_ms as u128 {
-                ai_loading = true;
-                ai_status = "Querying AI...".to_string();
-            }
-        }
-
         terminal.draw(|f| {
             match mode {
                 UiMode::Search => {
@@ -709,9 +694,16 @@ fn run_unified_ui(
                             ai_cursor_pos,
                             Color::Green,
                         )
+                    } else if !ai_suggested_cmd.is_empty() {
+                        (
+                            " AI Query (Enter=run, Ctrl+E=edit) [Tab=search] ",
+                            &input,
+                            cursor_pos,
+                            Color::Yellow,
+                        )
                     } else {
                         (
-                            " AI Query [Tab=search mode] ",
+                            " AI Query (Enter=ask AI) [Tab=search] ",
                             &input,
                             cursor_pos,
                             Color::Yellow,
@@ -748,7 +740,6 @@ fn run_unified_ui(
         // Process AI query after drawing (so loading state shows)
         if mode == UiMode::Ai && ai_loading {
             ai_loading = false;
-            pending_query = false;
 
             match query_lm_studio(&input, command, &entries, port) {
                 Ok(cmd) => {
@@ -874,8 +865,13 @@ fn run_unified_ui(
                                 }
                                 KeyCode::Enter => {
                                     if !ai_suggested_cmd.is_empty() {
+                                        // Run the suggested command
                                         result = Some(UiResult::Command(ai_suggested_cmd.clone()));
                                         break;
+                                    } else if !input.is_empty() && !ai_loading {
+                                        // Trigger AI query
+                                        ai_loading = true;
+                                        ai_status = "Querying AI...".to_string();
                                     }
                                 }
                                 KeyCode::Tab => {
@@ -905,22 +901,19 @@ fn run_unified_ui(
                                 KeyCode::Char(c) => {
                                     input.insert(cursor_pos, c);
                                     cursor_pos += 1;
-                                    last_input_time = std::time::Instant::now();
-                                    pending_query = true;
-                                    ai_status = "Typing... (will query after pause)".to_string();
+                                    // Clear previous suggestion when query changes
+                                    ai_suggested_cmd.clear();
+                                    ai_status = "Type query, Enter=ask AI".to_string();
                                 }
                                 KeyCode::Backspace => {
                                     if cursor_pos > 0 {
                                         input.remove(cursor_pos - 1);
                                         cursor_pos -= 1;
-                                        if !input.is_empty() {
-                                            last_input_time = std::time::Instant::now();
-                                            pending_query = true;
-                                            ai_status = "Typing... (will query after pause)".to_string();
+                                        ai_suggested_cmd.clear();
+                                        if input.is_empty() {
+                                            ai_status = "Type query, Enter=ask AI (Tab=search mode)".to_string();
                                         } else {
-                                            pending_query = false;
-                                            ai_suggested_cmd.clear();
-                                            ai_status = "Type your query (Tab=search mode)".to_string();
+                                            ai_status = "Type query, Enter=ask AI".to_string();
                                         }
                                     }
                                 }
@@ -1197,11 +1190,10 @@ fn run_search(command: &str, refresh: bool, print_only: bool, list: bool) -> Res
         return Ok(());
     }
 
-    // Default LM Studio port and debounce
+    // Default LM Studio port
     let port = 1234;
-    let debounce_ms = 2000;
 
-    let result = run_unified_ui(&resolved, info.entries, port, debounce_ms, false)?;
+    let result = run_unified_ui(&resolved, info.entries, port, false)?;
 
     match result {
         Some(UiResult::Entry(entry)) => {
@@ -1281,11 +1273,7 @@ fn main() -> Result<()> {
                     eprintln!("Copied {} bytes to clipboard", help_output.len());
                 }
             }
-            Commands::Ai {
-                command,
-                port,
-                debounce,
-            } => {
+            Commands::Ai { command, port } => {
                 let resolved = resolve_command(&command)?;
                 let info = load_or_scan(&resolved, false)?;
 
@@ -1293,7 +1281,7 @@ fn main() -> Result<()> {
                     anyhow::bail!("No commands found for {}", command);
                 }
 
-                let result = run_unified_ui(&resolved, info.entries, port, debounce, true)?;
+                let result = run_unified_ui(&resolved, info.entries, port, true)?;
 
                 match result {
                     Some(UiResult::Entry(entry)) => {
