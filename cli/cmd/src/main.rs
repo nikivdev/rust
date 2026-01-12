@@ -755,9 +755,9 @@ fn run_fuzzy_ui(entries: Vec<Entry>) -> Result<Option<Entry>> {
                         break;
                     }
                     KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        // Ctrl+O: copy selected command to clipboard and exit
+                        // Ctrl+O: copy selected command + description to clipboard and exit
                         if let Some(entry) = app.selected() {
-                            let cmd_str = entry.command.clone();
+                            let cmd_str = entry.display_text();
                             // Copy to clipboard using pbcopy
                             if let Ok(mut child) = Command::new("pbcopy")
                                 .stdin(Stdio::piped())
