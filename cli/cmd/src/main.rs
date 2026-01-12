@@ -724,22 +724,46 @@ fn build_command_string(entry: &Entry) -> String {
     }
 }
 
-fn check_command_exists(command: &str) -> Result<()> {
+/// Resolve command to an executable path.
+/// Falls back to ~/bin/<cmd> if `which` fails (e.g., for shell functions).
+fn resolve_command(command: &str) -> Result<String> {
+    // If it's already a path, use it directly
+    if command.contains('/') {
+        if PathBuf::from(command).exists() {
+            return Ok(command.to_string());
+        }
+        anyhow::bail!("Command not found: {}", command);
+    }
+
+    // Try `which` first
     let which = Command::new("which")
         .arg(command)
         .output()
-        .context("Failed to find command")?;
+        .context("Failed to run which")?;
 
-    if !which.status.success() {
-        anyhow::bail!("Command not found: {}", command);
+    if which.status.success() {
+        let path = String::from_utf8_lossy(&which.stdout).trim().to_string();
+        // Verify it's an actual file (not a function/alias output)
+        if PathBuf::from(&path).is_file() {
+            return Ok(command.to_string());
+        }
     }
-    Ok(())
+
+    // Fall back to ~/bin/<cmd>
+    if let Some(home) = dirs::home_dir() {
+        let bin_path = home.join("bin").join(command);
+        if bin_path.is_file() {
+            return Ok(bin_path.to_string_lossy().to_string());
+        }
+    }
+
+    anyhow::bail!("Command not found: {} (not in PATH or ~/bin/)", command)
 }
 
 fn run_search(command: &str, refresh: bool, print_only: bool, list: bool) -> Result<()> {
-    check_command_exists(command)?;
+    let resolved = resolve_command(command)?;
 
-    let info = load_or_scan(command, refresh)?;
+    let info = load_or_scan(&resolved, refresh)?;
 
     if info.entries.is_empty() {
         eprintln!("No commands or flags found for {}", command);
@@ -790,10 +814,10 @@ fn main() -> Result<()> {
                 path,
                 depth,
             } => {
-                check_command_exists(&command)?;
+                let resolved = resolve_command(&command)?;
 
-                eprintln!("Collecting deep help for '{}'...", command);
-                let help_output = collect_deep_help(&command, depth)?;
+                eprintln!("Collecting deep help for '{}'...", resolved);
+                let help_output = collect_deep_help(&resolved, depth)?;
 
                 if let Some(path) = path {
                     fs::write(&path, &help_output)
