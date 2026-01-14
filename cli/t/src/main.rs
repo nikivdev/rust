@@ -20,12 +20,27 @@ fn main() {
                 }
                 return;
             }
-            _ => {}
+            template => {
+                // Check if it's a template in ~/new/
+                let home = dirs::home_dir().expect("Could not find home directory");
+                let template_dir = home.join("new").join(template);
+                if template_dir.exists() && template_dir.is_dir() {
+                    create_from_template(template);
+                    return;
+                }
+                // Unknown argument, show help
+                eprintln!("Unknown command or template: {}", template);
+                eprintln!("Usage: t [template]");
+                eprintln!("       t archive");
+                eprintln!("       t init <shell>");
+                list_templates();
+                return;
+            }
         }
     }
 
     // Default: create new temp directory
-    create_new();
+    create_new(None);
 }
 
 fn init_shell(shell: &str) {
@@ -72,7 +87,7 @@ fi
     }
 }
 
-fn create_new() {
+fn create_new(template: Option<&str>) -> PathBuf {
     let home = dirs::home_dir().expect("Could not find home directory");
     let base_dir = home.join("t");
 
@@ -89,8 +104,53 @@ fn create_new() {
     // Create the directory
     fs::create_dir_all(&path).expect("Could not create directory");
 
-    // Output path for shell to cd into
+    // Output path immediately so shell can cd
     println!("{}", path.display());
+
+    // Copy template in background if provided
+    if let Some(tmpl) = template {
+        let template_dir = home.join("new").join(tmpl);
+        let dst = path.clone();
+
+        // Spawn background process to copy
+        std::process::Command::new("cp")
+            .arg("-R")
+            .arg(format!("{}/.", template_dir.display()))
+            .arg(&dst)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok();
+    }
+
+    path
+}
+
+fn create_from_template(template: &str) {
+    create_new(Some(template));
+}
+
+fn list_templates() {
+    let home = dirs::home_dir().expect("Could not find home directory");
+    let new_dir = home.join("new");
+
+    if !new_dir.exists() {
+        return;
+    }
+
+    let templates: Vec<_> = fs::read_dir(&new_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+
+    if !templates.is_empty() {
+        eprintln!("Available templates: {}", templates.join(", "));
+    }
 }
 
 fn archive() {

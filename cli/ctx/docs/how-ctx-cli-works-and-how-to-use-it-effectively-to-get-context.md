@@ -25,6 +25,9 @@ ctx pack ./src -o context.txt
 
 # AI-assisted: gather only files relevant to a task
 ctx gather . "fix the login bug"
+
+# Fast local selection (no AI)
+ctx fast . "fix the login bug"
 ```
 
 ## Commands
@@ -107,13 +110,29 @@ ctx gather . "fix button styling" --optimized
 - Omits the file tree from output
 - Best for focused tasks in ChatGPT (smaller context)
 
+### `ctx fast` (Local Heuristics)
+
+Fast local selection without any AI calls. It matches files by name and light heuristics, then packs
+their contents. Great when you want speed and predictable results.
+
+```bash
+ctx fast . "fix login redirect issue"
+ctx fast ./src "add caching for users"
+```
+
+Behavior:
+- Uses file-name matches first
+- Falls back to entry points if no matches
+- Outputs relative paths + file contents
+- Always saves a copy to `~/done/{datetime}.md`
+
 ## Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--max-size` | 500000 (500KB) | Maximum total output size in bytes |
 | `-o, --output` | clipboard | Output file path (supports `{date}`, `{time}`, `{datetime}`) |
-| `--optimized` | false | (gather only) Minimal file selection |
+| `--optimized` | false | gather: minimal file selection; fast: skip docs/config unless explicitly referenced |
 
 ## What Gets Included
 

@@ -3332,7 +3332,6 @@ name = "updates"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "crossterm 0.28.1",
  "notify 7.0.0",
  "ratatui 0.29.0",

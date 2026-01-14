@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::Local;
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -28,7 +27,7 @@ const DEDUP_WINDOW_MS: u128 = 100;
 
 #[derive(Clone)]
 struct FileEvent {
-    timestamp: String,
+    created_at: Instant,
     operation: String,
     file_type: String,
     path: String,
@@ -56,13 +55,30 @@ impl App {
         // Check for duplicate within time window
         if let Some((last_time, last_op)) = self.recent.get(&event.path) {
             if now.duration_since(*last_time).as_millis() < DEDUP_WINDOW_MS {
-                // CREATE takes priority over MODIFY
-                if *last_op == "CREATE" && event.operation == "MODIFY" {
-                    return false; // Skip this MODIFY, we already have CREATE
-                }
-                // DELETE takes priority - remove from recent and allow
-                if event.operation != "DELETE" && *last_op != "DELETE" {
-                    return false; // Skip duplicate
+                // Within dedup window - decide what to keep
+                // Priority: DELETE > CREATE > MODIFY
+                let dominated = match (last_op.as_str(), event.operation.as_str()) {
+                    // Already have DELETE, skip everything else
+                    ("DELETE", _) => true,
+                    // Already have CREATE, skip MODIFY
+                    ("CREATE", "MODIFY") => true,
+                    // New DELETE replaces existing - update the displayed event
+                    (_, "DELETE") => {
+                        // Find and update the existing event to DELETE
+                        if let Some(e) = self.events.iter_mut().find(|e| e.path == event.path) {
+                            e.operation = "DELETE".to_string();
+                            e.created_at = event.created_at;
+                            e.size = None;
+                        }
+                        self.recent.insert(event.path.clone(), (now, "DELETE".to_string()));
+                        return false; // Don't add new row, we updated existing
+                    }
+                    // Same operation, skip
+                    (a, b) if a == b => true,
+                    _ => false,
+                };
+                if dominated {
+                    return false;
                 }
             }
         }
@@ -91,6 +107,17 @@ fn format_size(bytes: u64) -> String {
         format!("{}kb", bytes / 1024)
     } else {
         format!("{:.1}mb", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+fn format_time_ago(instant: Instant) -> String {
+    let secs = instant.elapsed().as_secs();
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h", secs / 3600)
     }
 }
 
@@ -164,7 +191,7 @@ fn main() -> Result<()> {
                 };
 
                 app.add_event(FileEvent {
-                    timestamp: Local::now().format("%H:%M:%S%.3f").to_string(),
+                    created_at: Instant::now(),
                     operation: operation.to_string(),
                     file_type: file_type.to_string(),
                     path: relative_path,
@@ -178,7 +205,7 @@ fn main() -> Result<()> {
 
             // Header row
             let header = Row::new(vec![
-                Cell::from("TIMESTAMP").style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
+                Cell::from("AGO").style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
                 Cell::from("OPERATION").style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
                 Cell::from("TYPE").style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
                 Cell::from("PATH").style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
@@ -199,19 +226,19 @@ fn main() -> Result<()> {
                         _ => (Color::White, Color::DarkGray),
                     };
 
-                    let type_icon = if e.file_type == "folder" { "󰉋" } else { "󰈙" };
+                    let type_str = if e.file_type == "folder" { "󰉋 dir" } else { "󰈙 file" };
 
                     let size_str = e.size.map(format_size).unwrap_or_else(|| "–".to_string());
 
                     let row = Row::new(vec![
-                        Cell::from(e.timestamp.clone()).style(Style::default().fg(Color::DarkGray)),
-                        Cell::from(format!(" {} ", e.operation)).style(
+                        Cell::from(format_time_ago(e.created_at)).style(Style::default().fg(Color::DarkGray)),
+                        Cell::from(e.operation.clone()).style(
                             Style::default()
                                 .fg(op_color)
                                 .bg(op_bg)
                                 .add_modifier(Modifier::BOLD)
                         ),
-                        Cell::from(format!("{} {}", type_icon, e.file_type)).style(Style::default().fg(Color::Gray)),
+                        Cell::from(type_str).style(Style::default().fg(Color::DarkGray)),
                         Cell::from(e.path.clone()).style(Style::default().fg(Color::Green)),
                         Cell::from(size_str).style(Style::default().fg(Color::DarkGray)),
                     ]);
@@ -227,11 +254,11 @@ fn main() -> Result<()> {
             let table = Table::new(
                 rows,
                 [
-                    Constraint::Length(14),  // TIMESTAMP
-                    Constraint::Length(10),  // OPERATION
-                    Constraint::Length(10),  // TYPE
-                    Constraint::Min(30),     // PATH
-                    Constraint::Length(10),  // SIZE
+                    Constraint::Length(4),   // AGO
+                    Constraint::Length(8),   // OPERATION
+                    Constraint::Length(8),   // TYPE
+                    Constraint::Min(20),     // PATH
+                    Constraint::Length(6),   // SIZE
                 ],
             )
             .header(header)

@@ -1,9 +1,9 @@
-use std::path::Path;
-use std::process::{Command, Stdio};
 use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use ignore::WalkBuilder;
 
@@ -18,18 +18,47 @@ fn try_main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Gather { path, task, max_size, output, optimized }) => gather_context(&path, &task, max_size, output.as_deref(), optimized),
-        Some(Commands::Pack { path, output, max_size, optimized }) => pack_context(&path, output.as_deref(), max_size, false, optimized),
+        Some(Commands::Gather {
+            path,
+            task,
+            max_size,
+            output,
+            optimized,
+        }) => gather_context(&path, &task, max_size, output.as_deref(), optimized),
+        Some(Commands::Fast {
+            path,
+            task,
+            max_size,
+            output,
+            optimized,
+        }) => fast_context(&path, &task, max_size, output.as_deref(), optimized),
+        Some(Commands::Pack {
+            path,
+            output,
+            max_size,
+            optimized,
+        }) => pack_context(&path, output.as_deref(), max_size, false, optimized),
         // rp-cli wrappers
         Some(Commands::Tree { folders, mode }) => rp_tree(folders, mode.as_deref()),
-        Some(Commands::Search { pattern, extensions, context_lines }) => rp_search(&pattern, extensions.as_deref(), context_lines),
-        Some(Commands::Read { path, start_line, limit }) => rp_read(&path, start_line, limit),
+        Some(Commands::Search {
+            pattern,
+            extensions,
+            context_lines,
+        }) => rp_search(&pattern, extensions.as_deref(), context_lines),
+        Some(Commands::Read {
+            path,
+            start_line,
+            limit,
+        }) => rp_read(&path, start_line, limit),
         Some(Commands::Structure { paths, scope }) => rp_structure(paths, scope.as_deref()),
         Some(Commands::Select { action, paths }) => rp_select(&action, paths),
         Some(Commands::Context { include }) => rp_context(include.as_deref()),
         Some(Commands::Chat { message, mode }) => rp_chat(&message, mode.as_deref()),
         Some(Commands::Workspace { action }) => rp_workspace(action.as_deref()),
-        Some(Commands::Builder { instructions, response_type }) => rp_builder(&instructions, response_type.as_deref()),
+        Some(Commands::Builder {
+            instructions,
+            response_type,
+        }) => rp_builder(&instructions, response_type.as_deref()),
         Some(Commands::Rp { command }) => rp_exec(&command),
         None => {
             // Default: ctx <path> packs and copies to clipboard
@@ -40,7 +69,12 @@ fn try_main() -> Result<()> {
 }
 
 #[derive(Parser)]
-#[command(name = "ctx", version, about = "Turn folders into efficient AI context", propagate_version = true)]
+#[command(
+    name = "ctx",
+    version,
+    about = "Turn folders into efficient AI context",
+    propagate_version = true
+)]
 struct Cli {
     /// Path to folder to pack (default: current directory).
     path: Option<String>,
@@ -109,8 +143,35 @@ enum Commands {
         optimized: bool,
     },
 
-    // ── rp-cli wrappers ─────────────────────────────────────────────────
+    /// Fast local context selection (no AI).
+    ///
+    /// Uses file-name matching and lightweight heuristics to select
+    /// relevant files for a task. Designed to be extremely fast.
+    ///
+    /// Examples:
+    ///   ctx fast . "fix login redirect"
+    ///   ctx fast ./src "add caching for users"
+    Fast {
+        /// Path to folder to analyze.
+        path: String,
 
+        /// Task description.
+        task: String,
+
+        /// Maximum context size in bytes (default: 200KB for ChatGPT).
+        #[arg(long, default_value = "200000")]
+        max_size: usize,
+
+        /// Output file path (default: clipboard). Supports {date} and {time} placeholders.
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Optimized mode: skip docs/config unless explicitly referenced.
+        #[arg(long)]
+        optimized: bool,
+    },
+
+    // ── rp-cli wrappers ─────────────────────────────────────────────────
     /// Show file/folder tree from RepoPrompt workspace.
     ///
     /// Examples:
@@ -259,7 +320,13 @@ enum Commands {
     },
 }
 
-fn pack_context(path: &str, output: Option<&str>, max_size: usize, to_clipboard: bool, optimized: bool) -> Result<()> {
+fn pack_context(
+    path: &str,
+    output: Option<&str>,
+    max_size: usize,
+    to_clipboard: bool,
+    optimized: bool,
+) -> Result<()> {
     let root = expand_tilde(path);
     let root_path = fs::canonicalize(Path::new(&root)).context("failed to resolve path")?;
 
@@ -281,7 +348,7 @@ fn pack_context(path: &str, output: Option<&str>, max_size: usize, to_clipboard:
 
     // Walk directory respecting .gitignore, skip hidden files
     let walker = WalkBuilder::new(&root_path)
-        .hidden(true)  // Skip hidden files/dirs like .git
+        .hidden(true) // Skip hidden files/dirs like .git
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
@@ -328,7 +395,7 @@ fn pack_context(path: &str, output: Option<&str>, max_size: usize, to_clipboard:
         // Check size limit
         if total_size + file_section.len() > max_size {
             skipped_count += 1;
-            continue;  // Skip this file but continue with others
+            continue; // Skip this file but continue with others
         }
 
         total_size += file_section.len();
@@ -342,19 +409,33 @@ fn pack_context(path: &str, output: Option<&str>, max_size: usize, to_clipboard:
     let mode_str = if optimized { " (optimized)" } else { "" };
     if to_clipboard {
         copy_to_clipboard(&context)?;
-        let mut msg = format!("copied {} files ({} bytes) to clipboard{}", file_count, context.len(), mode_str);
+        let mut msg = format!(
+            "copied {} files ({} bytes) to clipboard{}",
+            file_count,
+            context.len(),
+            mode_str
+        );
         if noise_skipped > 0 {
             msg.push_str(&format!(", filtered {} noise files", noise_skipped));
         }
         if skipped_count > 0 {
             let skipped_word = if skipped_count == 1 { "file" } else { "files" };
-            msg.push_str(&format!(", skipped {} large {}", skipped_count, skipped_word));
+            msg.push_str(&format!(
+                ", skipped {} large {}",
+                skipped_count, skipped_word
+            ));
         }
         eprintln!("{}", msg);
     } else if let Some(out_path) = output {
         let expanded = expand_tilde(out_path);
         fs::write(&expanded, &context).context("failed to write output file")?;
-        eprintln!("wrote {} files ({} bytes) to {}{}", file_count, context.len(), expanded, mode_str);
+        eprintln!(
+            "wrote {} files ({} bytes) to {}{}",
+            file_count,
+            context.len(),
+            expanded,
+            mode_str
+        );
     } else {
         print!("{}", context);
     }
@@ -369,7 +450,9 @@ fn copy_to_clipboard(content: &str) -> Result<()> {
         .context("failed to run pbcopy")?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(content.as_bytes()).context("failed to write to pbcopy")?;
+        stdin
+            .write_all(content.as_bytes())
+            .context("failed to write to pbcopy")?;
     }
 
     let status = child.wait().context("failed to wait for pbcopy")?;
@@ -380,7 +463,13 @@ fn copy_to_clipboard(content: &str) -> Result<()> {
     Ok(())
 }
 
-fn gather_context(path: &str, task: &str, max_size: usize, output_path: Option<&str>, optimized: bool) -> Result<()> {
+fn gather_context(
+    path: &str,
+    task: &str,
+    max_size: usize,
+    output_path: Option<&str>,
+    optimized: bool,
+) -> Result<()> {
     let root = expand_tilde(path);
     let root_path = fs::canonicalize(Path::new(&root)).context("failed to resolve path")?;
 
@@ -465,8 +554,10 @@ Be thorough but selective - include files that would help debug this specific is
     let json_str = extract_json_array(response).unwrap_or(response);
 
     // Parse the JSON array
-    let files: Vec<String> = serde_json::from_str(json_str)
-        .context(format!("failed to parse claude response as JSON array: {}", json_str))?;
+    let files: Vec<String> = serde_json::from_str(json_str).context(format!(
+        "failed to parse claude response as JSON array: {}",
+        json_str
+    ))?;
 
     if files.is_empty() {
         eprintln!("no relevant files found for task: {}", task);
@@ -511,12 +602,7 @@ Be thorough but selective - include files that would help debug this specific is
         };
 
         let lang = get_language_hint(&full_path);
-        let file_section = format!(
-            "File: {}\n```{}\n{}\n```\n\n",
-            file_path,
-            lang,
-            content
-        );
+        let file_section = format!("File: {}\n```{}\n{}\n```\n\n", file_path, lang, content);
 
         // Check size limit
         if total_size + file_section.len() > max_size {
@@ -551,18 +637,40 @@ Be thorough but selective - include files that would help debug this specific is
 
         if skipped_count > 0 {
             let skipped_word = if skipped_count == 1 { "file" } else { "files" };
-            eprintln!("wrote {} files ({} bytes) to {}, skipped {} large {}", file_count, context.len(), expanded, skipped_count, skipped_word);
+            eprintln!(
+                "wrote {} files ({} bytes) to {}, skipped {} large {}",
+                file_count,
+                context.len(),
+                expanded,
+                skipped_count,
+                skipped_word
+            );
         } else {
-            eprintln!("wrote {} files ({} bytes) to {}", file_count, context.len(), expanded);
+            eprintln!(
+                "wrote {} files ({} bytes) to {}",
+                file_count,
+                context.len(),
+                expanded
+            );
         }
     } else {
         copy_to_clipboard(&context)?;
 
         if skipped_count > 0 {
             let skipped_word = if skipped_count == 1 { "file" } else { "files" };
-            eprintln!("copied {} files ({} bytes) to clipboard, skipped {} large {}", file_count, context.len(), skipped_count, skipped_word);
+            eprintln!(
+                "copied {} files ({} bytes) to clipboard, skipped {} large {}",
+                file_count,
+                context.len(),
+                skipped_count,
+                skipped_word
+            );
         } else {
-            eprintln!("copied {} files ({} bytes) to clipboard", file_count, context.len());
+            eprintln!(
+                "copied {} files ({} bytes) to clipboard",
+                file_count,
+                context.len()
+            );
         }
     }
 
@@ -570,6 +678,281 @@ Be thorough but selective - include files that would help debug this specific is
     eprintln!("{}", done_path);
 
     Ok(())
+}
+
+struct Candidate {
+    rel_path: String,
+    full_path: PathBuf,
+    score: i32,
+    priority: u8,
+    cached_content: Option<String>,
+}
+
+fn fast_context(
+    path: &str,
+    task: &str,
+    max_size: usize,
+    output_path: Option<&str>,
+    optimized: bool,
+) -> Result<()> {
+    let root = expand_tilde(path);
+    let root_path = fs::canonicalize(Path::new(&root)).context("failed to resolve path")?;
+
+    if !root_path.exists() {
+        anyhow::bail!("path '{}' does not exist", path);
+    }
+
+    let tokens = tokenize_query(task);
+
+    let walker = WalkBuilder::new(&root_path)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .build();
+
+    let mut matched: Vec<Candidate> = Vec::new();
+    let mut fallback: Vec<Candidate> = Vec::new();
+
+    for entry in walker.flatten() {
+        let entry_path = entry.path();
+        if !entry_path.is_file() {
+            continue;
+        }
+        if is_binary_file(entry_path) {
+            continue;
+        }
+
+        let rel_path = entry_path.strip_prefix(&root_path).unwrap_or(entry_path);
+        let rel_str = rel_path.to_string_lossy().to_string();
+
+        let priority = file_priority(entry_path);
+        let rel_lower = rel_str.to_lowercase();
+        let path_hits = count_token_hits(&rel_lower, &tokens);
+
+        if optimized {
+            if should_skip_path(entry_path) {
+                continue;
+            }
+            if priority >= 3 && path_hits == 0 {
+                continue;
+            }
+        }
+
+        let mut score = base_score(priority) + (path_hits as i32 * 12);
+        let mut matched_flag = path_hits > 0;
+        let mut cached_content = None;
+
+        if !tokens.is_empty() && !matched_flag && priority <= 1 {
+            if let Ok(content) = fs::read_to_string(entry_path) {
+                let content_lower = content.to_lowercase();
+                let content_hits = count_token_hits(&content_lower, &tokens);
+                if content_hits > 0 {
+                    score += content_hits as i32 * 4;
+                    matched_flag = true;
+                    cached_content = Some(content);
+                }
+            }
+        }
+
+        let candidate = Candidate {
+            rel_path: rel_str,
+            full_path: entry_path.to_path_buf(),
+            score,
+            priority,
+            cached_content,
+        };
+
+        if tokens.is_empty() {
+            matched.push(candidate);
+        } else if matched_flag {
+            matched.push(candidate);
+        } else {
+            fallback.push(candidate);
+        }
+    }
+
+    let mut candidates = if matched.is_empty() {
+        fallback
+    } else {
+        matched
+    };
+
+    if candidates.is_empty() {
+        eprintln!("no relevant files found for task: {}", task);
+        return Ok(());
+    }
+
+    candidates.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.priority.cmp(&b.priority))
+            .then_with(|| a.rel_path.cmp(&b.rel_path))
+    });
+
+    let mut context = String::new();
+    let mut total_size: usize = 0;
+    let mut file_count = 0;
+    let mut skipped_count = 0;
+
+    context.push_str(&format!("# Task: {}\n\n", task));
+    context.push_str("<file_contents>\n");
+
+    for candidate in candidates {
+        let content = match candidate.cached_content {
+            Some(content) => content,
+            None => match fs::read_to_string(&candidate.full_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("warning: could not read {}: {}", candidate.rel_path, e);
+                    continue;
+                }
+            },
+        };
+
+        let lang = get_language_hint(&candidate.full_path);
+        let file_section = format!(
+            "File: {}\n```{}\n{}\n```\n\n",
+            candidate.rel_path, lang, content
+        );
+
+        if total_size + file_section.len() > max_size {
+            skipped_count += 1;
+            continue;
+        }
+
+        total_size += file_section.len();
+        context.push_str(&file_section);
+        file_count += 1;
+    }
+
+    context.push_str("</file_contents>\n");
+
+    let done_path = expand_output_path("~/done/{datetime}.md");
+    if let Some(parent) = Path::new(&done_path).parent() {
+        fs::create_dir_all(parent).context("failed to create ~/done directory")?;
+    }
+    fs::write(&done_path, &context).context("failed to write to ~/done")?;
+
+    if let Some(out_path) = output_path {
+        let expanded = expand_output_path(out_path);
+        if let Some(parent) = Path::new(&expanded).parent() {
+            fs::create_dir_all(parent).context("failed to create output directory")?;
+        }
+        fs::write(&expanded, &context).context("failed to write output file")?;
+
+        if skipped_count > 0 {
+            let skipped_word = if skipped_count == 1 { "file" } else { "files" };
+            eprintln!(
+                "wrote {} files ({} bytes) to {}, skipped {} large {}",
+                file_count,
+                context.len(),
+                expanded,
+                skipped_count,
+                skipped_word
+            );
+        } else {
+            eprintln!(
+                "wrote {} files ({} bytes) to {}",
+                file_count,
+                context.len(),
+                expanded
+            );
+        }
+    } else {
+        copy_to_clipboard(&context)?;
+
+        if skipped_count > 0 {
+            let skipped_word = if skipped_count == 1 { "file" } else { "files" };
+            eprintln!(
+                "copied {} files ({} bytes) to clipboard, skipped {} large {}",
+                file_count,
+                context.len(),
+                skipped_count,
+                skipped_word
+            );
+        } else {
+            eprintln!(
+                "copied {} files ({} bytes) to clipboard",
+                file_count,
+                context.len()
+            );
+        }
+    }
+
+    eprintln!("{}", done_path);
+
+    Ok(())
+}
+
+fn tokenize_query(query: &str) -> Vec<String> {
+    let stopwords = [
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "your",
+        "you",
+        "are",
+        "was",
+        "were",
+        "fix",
+        "add",
+        "update",
+        "change",
+        "implement",
+        "create",
+        "make",
+        "build",
+        "how",
+        "what",
+        "why",
+        "a",
+        "an",
+        "to",
+        "in",
+        "on",
+        "of",
+        "is",
+        "it",
+    ];
+
+    let mut tokens: Vec<String> = query
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter_map(|part| {
+            let trimmed = part.trim().to_lowercase();
+            if trimmed.len() < 3 || stopwords.contains(&trimmed.as_str()) {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
+        .collect();
+
+    tokens.sort();
+    tokens.dedup();
+    tokens
+}
+
+fn count_token_hits(haystack: &str, tokens: &[String]) -> usize {
+    tokens
+        .iter()
+        .filter(|t| haystack.contains(t.as_str()))
+        .count()
+}
+
+fn base_score(priority: u8) -> i32 {
+    match priority {
+        0 => 60,
+        1 => 35,
+        2 => 15,
+        3 => 6,
+        4 => 3,
+        _ => 1,
+    }
 }
 
 fn expand_output_path(path: &str) -> String {
@@ -601,7 +984,12 @@ fn build_file_tree(root: &Path) -> Result<String> {
     Ok(tree)
 }
 
-fn build_tree_recursive(root: &Path, current: &Path, prefix: &str, output: &mut String) -> Result<()> {
+fn build_tree_recursive(
+    root: &Path,
+    current: &Path,
+    prefix: &str,
+    output: &mut String,
+) -> Result<()> {
     let mut entries: Vec<_> = WalkBuilder::new(current)
         .max_depth(Some(1))
         .hidden(true)
@@ -644,14 +1032,10 @@ fn build_tree_recursive(root: &Path, current: &Path, prefix: &str, output: &mut 
 
 fn is_binary_file(path: &Path) -> bool {
     let binary_extensions = [
-        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "svg",
-        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-        "zip", "tar", "gz", "rar", "7z",
-        "exe", "dll", "so", "dylib", "a",
-        "wasm", "pyc", "class",
-        "mp3", "mp4", "wav", "avi", "mov", "mkv",
-        "ttf", "otf", "woff", "woff2", "eot",
-        "db", "sqlite", "sqlite3",
+        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "svg", "pdf", "doc", "docx", "xls",
+        "xlsx", "ppt", "pptx", "zip", "tar", "gz", "rar", "7z", "exe", "dll", "so", "dylib", "a",
+        "wasm", "pyc", "class", "mp3", "mp4", "wav", "avi", "mov", "mkv", "ttf", "otf", "woff",
+        "woff2", "eot", "db", "sqlite", "sqlite3",
         "lock", // often large and not useful for context
     ];
 
@@ -664,7 +1048,7 @@ fn is_binary_file(path: &Path) -> bool {
 
     // Check for files without extension that are likely binary
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    if name.starts_with('.') && !name.contains('.', ) {
+    if name.starts_with('.') && !name.contains('.') {
         // Hidden files without extension might be config, check content
     }
 
@@ -758,18 +1142,37 @@ fn should_skip_path(path: &Path) -> bool {
     ];
 
     for noise in noise_dirs {
-        if path_str.contains(&format!("/{}/", noise)) || path_str.contains(&format!("\\{}\\", noise)) {
+        if path_str.contains(&format!("/{}/", noise))
+            || path_str.contains(&format!("\\{}\\", noise))
+        {
             return true;
         }
     }
 
     // Skip noise file extensions
     let noise_extensions = [
-        "ocdbt", "ckpt", "pth", "pt", "safetensors", "bin", "h5", "pkl", "pickle",
-        "npy", "npz", "tfrecord", "parquet", "feather",
-        "log", "bak", "swp", "swo",
-        "min.js", "min.css", "map",
-        "d.ts",  // TypeScript declaration files (often generated)
+        "ocdbt",
+        "ckpt",
+        "pth",
+        "pt",
+        "safetensors",
+        "bin",
+        "h5",
+        "pkl",
+        "pickle",
+        "npy",
+        "npz",
+        "tfrecord",
+        "parquet",
+        "feather",
+        "log",
+        "bak",
+        "swp",
+        "swo",
+        "min.js",
+        "min.css",
+        "map",
+        "d.ts", // TypeScript declaration files (often generated)
     ];
 
     if let Some(ext) = path.extension() {
@@ -818,21 +1221,30 @@ fn file_priority(path: &Path) -> u8 {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
 
     // Priority 0: Main entry points
-    if name == "main.rs" || name == "lib.rs" || name == "main.py" || name == "app.py"
-        || name == "index.ts" || name == "index.js" || name == "mod.rs"
+    if name == "main.rs"
+        || name == "lib.rs"
+        || name == "main.py"
+        || name == "app.py"
+        || name == "index.ts"
+        || name == "index.js"
+        || name == "mod.rs"
     {
         return 0;
     }
 
     // Priority 1: Source code
     match ext {
-        "rs" | "py" | "go" | "ts" | "tsx" | "js" | "jsx" | "swift" | "kt" | "java" | "c" | "cpp" | "h" | "hpp" | "cs" | "rb" | "php" => return 1,
+        "rs" | "py" | "go" | "ts" | "tsx" | "js" | "jsx" | "swift" | "kt" | "java" | "c"
+        | "cpp" | "h" | "hpp" | "cs" | "rb" | "php" => return 1,
         _ => {}
     }
 
     // Priority 2: Config that affects behavior
-    if name == "Cargo.toml" || name == "pyproject.toml" || name == "package.json"
-        || name == "tsconfig.json" || name == "go.mod"
+    if name == "Cargo.toml"
+        || name == "pyproject.toml"
+        || name == "package.json"
+        || name == "tsconfig.json"
+        || name == "go.mod"
     {
         return 2;
     }
