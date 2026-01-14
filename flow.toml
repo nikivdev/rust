@@ -37,6 +37,7 @@ Available tasks:
 - deploy-cmd             Build the Cmd CLI and install it to ~/bin/cmd.
 - cmd [args...]          Run the Cmd CLI (fuzzy search CLI commands).
 - deploy-t               Build the T CLI and install it to ~/bin/t.
+- deploy-updates         Build the Updates CLI and install it to ~/bin/updates.
 - deploy-mac-cpu         Build the macOS CLI (with cpu command) and install it to ~/bin/mac.
 - deploy-mac             Build the macOS CLI binary and install it to ~/bin/mac.
 - km [args...]           Run the Keyboard Maestro CLI (passes CLI args through).
@@ -714,6 +715,28 @@ chmod 755 "$bin_dir/$bin_name"
 echo "Installed CLI to $bin_dir/$bin_name"
 """
 description = "Build the T CLI and install it to ~/bin/t."
+
+[[tasks]]
+name = "deploy-updates"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+bin_artifact="updates"
+bin_name="updates"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/updates/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/$bin_artifact" "$bin_dir/$bin_name"
+chmod 755 "$bin_dir/$bin_name"
+echo "Installed CLI to $bin_dir/$bin_name"
+"""
+description = "Build the Updates CLI and install it to ~/bin/updates."
 
 [[tasks]]
 name = "km"
