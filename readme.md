@@ -4,7 +4,7 @@
 
 With [flow](https://github.com/nikivdev/flow), run `f setup`, then `f` will fuzzy search through list of tasks.
 
-There are lots of CLIs here, running `f deploy-` will compile and put new version of them into your path.
+There are lots of CLIs here, running `f deploy-<cli>` will compile and put new version of them into your path.
 
 ## Contributing
 
