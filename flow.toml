@@ -38,6 +38,7 @@ Available tasks:
 - cmd [args...]          Run the Cmd CLI (fuzzy search CLI commands).
 - deploy-t               Build the T CLI and install it to ~/bin/t.
 - deploy-updates         Build the Updates CLI and install it to ~/bin/updates.
+- deploy-trash           Build the Trash CLI and install it to ~/bin/trash and ~/bin/rr.
 - deploy-mac-cpu         Build the macOS CLI (with cpu command) and install it to ~/bin/mac.
 - deploy-mac             Build the macOS CLI binary and install it to ~/bin/mac.
 - km [args...]           Run the Keyboard Maestro CLI (passes CLI args through).
@@ -737,6 +738,27 @@ chmod 755 "$bin_dir/$bin_name"
 echo "Installed CLI to $bin_dir/$bin_name"
 """
 description = "Build the Updates CLI and install it to ~/bin/updates."
+
+[[tasks]]
+name = "deploy-trash"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/trash/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/trash" "$bin_dir/trash"
+cp "$CARGO_TARGET_DIR/release/trash" "$bin_dir/rr"
+chmod 755 "$bin_dir/trash" "$bin_dir/rr"
+echo "Installed trash to $bin_dir/trash and $bin_dir/rr"
+"""
+description = "Build the Trash CLI and install it to ~/bin/trash and ~/bin/rr."
 
 [[tasks]]
 name = "km"

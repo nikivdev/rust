@@ -2461,6 +2461,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rise"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+]
+
+[[package]]
 name = "rmcp"
 version = "0.11.0"
 dependencies = [
@@ -3269,6 +3277,10 @@ dependencies = [
  "tracing-log",
  "tracing-serde",
 ]
+
+[[package]]
+name = "trash"
+version = "0.1.0"
 
 [[package]]
 name = "try-lock"

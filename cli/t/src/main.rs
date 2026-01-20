@@ -7,8 +7,16 @@ fn main() {
 
     if args.len() > 1 {
         match args[1].as_str() {
+            "-h" | "--help" | "help" => {
+                print_help();
+                return;
+            }
             "archive" => {
                 archive();
+                return;
+            }
+            "clear" => {
+                clear();
                 return;
             }
             "init" => {
@@ -29,11 +37,8 @@ fn main() {
                     return;
                 }
                 // Unknown argument, show help
-                eprintln!("Unknown command or template: {}", template);
-                eprintln!("Usage: t [template]");
-                eprintln!("       t archive");
-                eprintln!("       t init <shell>");
-                list_templates();
+                eprintln!("Unknown: {}", template);
+                print_help();
                 return;
             }
         }
@@ -41,6 +46,65 @@ fn main() {
 
     // Default: create new temp directory
     create_new(None);
+}
+
+fn print_help() {
+    eprintln!("t - quick temp directories");
+    eprintln!();
+    eprintln!("Usage:");
+    eprintln!("  t              Create ~/t/jan-14 and cd into it");
+    eprintln!("  t <template>   Create with template from ~/new/<template>");
+    eprintln!("  t clear        Move current dir contents to ~/cleared");
+    eprintln!("  t archive      Move ~/t/* to ~/past/t/<date>");
+    eprintln!("  t init <shell> Print shell wrapper (fish/zsh/bash)");
+    eprintln!();
+    list_templates();
+}
+
+fn clear() {
+    let cwd = std::env::current_dir().expect("Could not get current directory");
+    let home = dirs::home_dir().expect("Could not find home directory");
+    let cleared_dir = home.join("cleared");
+
+    // Ensure ~/cleared exists
+    fs::create_dir_all(&cleared_dir).expect("Could not create ~/cleared");
+
+    let entries: Vec<_> = fs::read_dir(&cwd)
+        .expect("Could not read current directory")
+        .flatten()
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .collect();
+
+    if entries.is_empty() {
+        eprintln!("Nothing to clear");
+        return;
+    }
+
+    let mut moved = 0;
+    for entry in entries {
+        let name = entry.file_name();
+        let mut dest = cleared_dir.join(&name);
+
+        // Handle name conflicts by adding suffix
+        if dest.exists() {
+            let mut i = 2;
+            loop {
+                dest = cleared_dir.join(format!("{}-{}", name.to_string_lossy(), i));
+                if !dest.exists() {
+                    break;
+                }
+                i += 1;
+            }
+        }
+
+        if let Err(e) = fs::rename(entry.path(), &dest) {
+            eprintln!("Failed to move {}: {}", name.to_string_lossy(), e);
+            continue;
+        }
+        moved += 1;
+    }
+
+    eprintln!("Cleared {} items to ~/cleared", moved);
 }
 
 fn init_shell(shell: &str) {
@@ -144,7 +208,7 @@ fn list_templates() {
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|e| e.path().is_dir())
+        .filter(|e| e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.'))
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
 

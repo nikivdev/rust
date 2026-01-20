@@ -23,6 +23,7 @@ members = [
     "cli/cmd",
     "cli/t",
     "cli/updates",
+    "cli/trash",
     "lib/linsa",
     # "server/stream",  # removed
     # "lib/lin-rs",  # requires local outlines-core fork

@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::env;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -999,6 +1000,7 @@ fn build_tree_recursive(
         .build()
         .flatten()
         .filter(|e| e.path() != current)
+        .filter(|e| !folders_only || e.path().is_dir())
         .collect();
 
     entries.sort_by(|a, b| {
@@ -1283,15 +1285,19 @@ fn rp_exec(cmd: &str) -> Result<()> {
         .output()
         .context("failed to run rp-cli (is it installed?)")?;
 
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if !stderr.is_empty() {
+            bail!("{stderr}");
+        }
+        bail!("rp-cli exited with status {}", output.status);
+    }
+
     if !output.stdout.is_empty() {
         print!("{}", String::from_utf8_lossy(&output.stdout));
     }
     if !output.stderr.is_empty() {
         eprint!("{}", String::from_utf8_lossy(&output.stderr));
-    }
-
-    if !output.status.success() {
-        bail!("rp-cli exited with status {}", output.status);
     }
 
     Ok(())
@@ -1305,7 +1311,17 @@ fn rp_tree(folders: bool, mode: Option<&str>) -> Result<()> {
     if let Some(m) = mode {
         cmd.push_str(&format!(" --mode {}", m));
     }
-    rp_exec(&cmd)
+    match rp_exec(&cmd) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if should_fallback_local(&err) {
+                eprintln!("RepoPrompt unavailable, falling back to local tree.");
+                local_tree(folders)
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 fn rp_search(pattern: &str, extensions: Option<&str>, context_lines: Option<u32>) -> Result<()> {
@@ -1316,7 +1332,17 @@ fn rp_search(pattern: &str, extensions: Option<&str>, context_lines: Option<u32>
     if let Some(lines) = context_lines {
         cmd.push_str(&format!(" --context-lines {}", lines));
     }
-    rp_exec(&cmd)
+    match rp_exec(&cmd) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if should_fallback_local(&err) {
+                eprintln!("RepoPrompt unavailable, falling back to local search.");
+                local_search(pattern, extensions, context_lines)
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 fn rp_read(path: &str, start_line: Option<u32>, limit: Option<u32>) -> Result<()> {
@@ -1327,7 +1353,17 @@ fn rp_read(path: &str, start_line: Option<u32>, limit: Option<u32>) -> Result<()
     if let Some(lim) = limit {
         cmd.push_str(&format!(" --limit {}", lim));
     }
-    rp_exec(&cmd)
+    match rp_exec(&cmd) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if should_fallback_local(&err) {
+                eprintln!("RepoPrompt unavailable, falling back to local read.");
+                local_read(path, start_line, limit)
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 fn rp_structure(paths: Vec<String>, scope: Option<&str>) -> Result<()> {
@@ -1354,7 +1390,17 @@ fn rp_context(include: Option<&str>) -> Result<()> {
     if let Some(inc) = include {
         cmd.push_str(&format!(" --include {}", inc));
     }
-    rp_exec(&cmd)
+    match rp_exec(&cmd) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if should_fallback_local(&err) {
+                eprintln!("RepoPrompt unavailable, falling back to local context.");
+                local_context()
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 fn rp_chat(message: &str, mode: Option<&str>) -> Result<()> {
@@ -1381,4 +1427,165 @@ fn rp_builder(instructions: &str, response_type: Option<&str>) -> Result<()> {
         cmd.push_str(&format!(" --response-type {}", rt));
     }
     rp_exec(&cmd)
+}
+
+fn should_fallback_local(err: &anyhow::Error) -> bool {
+    let msg = err.to_string().to_lowercase();
+    msg.contains("repoprompt")
+        || msg.contains("rp-cli")
+        || msg.contains("cannot connect")
+        || msg.contains("failed to run rp-cli")
+}
+
+fn fallback_root() -> PathBuf {
+    if let Ok(path) = env::var("AI_CONTEXT_PATH") {
+        let candidate = PathBuf::from(path);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn fallback_max_size() -> usize {
+    env::var("CTX_MAX_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(500_000)
+}
+
+fn local_tree(folders_only: bool) -> Result<()> {
+    let root = fallback_root();
+    let mut output = String::new();
+    build_tree_recursive_filtered(&root, &root, "", &mut output, folders_only)?;
+    print!("{output}");
+    Ok(())
+}
+
+fn build_tree_recursive_filtered(
+    root: &Path,
+    current: &Path,
+    prefix: &str,
+    output: &mut String,
+    folders_only: bool,
+) -> Result<()> {
+    let mut entries: Vec<_> = WalkBuilder::new(current)
+        .max_depth(Some(1))
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .build()
+        .flatten()
+        .filter(|e| e.path() != current)
+        .collect();
+
+    entries.sort_by(|a, b| {
+        let a_is_dir = a.path().is_dir();
+        let b_is_dir = b.path().is_dir();
+        match (a_is_dir, b_is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.path().cmp(b.path()),
+        }
+    });
+
+    let count = entries.len();
+    for (i, entry) in entries.into_iter().enumerate() {
+        let path = entry.path();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let is_dir = path.is_dir();
+        if folders_only && !is_dir {
+            continue;
+        }
+        let is_last = i == count - 1;
+        let connector = if is_last { "└── " } else { "├── " };
+
+        if is_dir {
+            output.push_str(&format!("{}{}{}/\n", prefix, connector, name));
+            let new_prefix = format!("{}{}   ", prefix, if is_last { " " } else { "│" });
+            build_tree_recursive_filtered(root, path, &new_prefix, output, folders_only)?;
+        } else {
+            output.push_str(&format!("{}{}{}\n", prefix, connector, name));
+        }
+    }
+
+    Ok(())
+}
+
+fn local_search(pattern: &str, extensions: Option<&str>, context_lines: Option<u32>) -> Result<()> {
+    let root = fallback_root();
+    let exts: Option<Vec<String>> = extensions.map(|exts| {
+        exts.split(',')
+            .map(|s| s.trim().trim_start_matches('.').to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    });
+    let ctx = context_lines.unwrap_or(0) as usize;
+    for entry in WalkBuilder::new(&root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .build()
+        .flatten()
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if let Some(ref exts) = exts {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if !exts.contains(&ext.to_string()) {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+        }
+        let content = fs::read_to_string(path);
+        if let Ok(content) = content {
+            let lines: Vec<&str> = content.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
+                if line.contains(pattern) {
+                    let start = idx.saturating_sub(ctx);
+                    let end = (idx + ctx + 1).min(lines.len());
+                    for i in start..end {
+                        println!(
+                            "{}:{}:{}",
+                            path.display(),
+                            i + 1,
+                            lines[i].trim_end()
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn local_read(path: &str, start_line: Option<u32>, limit: Option<u32>) -> Result<()> {
+    let root = fallback_root();
+    let target = if Path::new(path).is_absolute() {
+        PathBuf::from(path)
+    } else {
+        root.join(path)
+    };
+    let content = fs::read_to_string(&target)
+        .with_context(|| format!("failed to read {}", target.display()))?;
+    let start = start_line.unwrap_or(1).saturating_sub(1) as usize;
+    let limit = limit.unwrap_or(u32::MAX) as usize;
+    let lines: Vec<&str> = content.lines().collect();
+    let end = (start + limit).min(lines.len());
+    for i in start..end {
+        println!("{}", lines[i]);
+    }
+    Ok(())
+}
+
+fn local_context() -> Result<()> {
+    let root = fallback_root();
+    let max_size = fallback_max_size();
+    pack_context(root.to_str().unwrap_or("."), None, max_size, false, true)
 }

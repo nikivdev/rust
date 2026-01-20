@@ -43,3 +43,5 @@ patcheck.tmp
 
 variables-*
 .ai/internal/
+
+.ai/todos/*.bike
