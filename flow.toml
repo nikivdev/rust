@@ -761,6 +761,26 @@ echo "Installed trash to $bin_dir/trash and $bin_dir/rr"
 description = "Build the Trash CLI and install it to ~/bin/trash and ~/bin/rr."
 
 [[tasks]]
+name = "deploy-trail"
+command = """
+set -euo pipefail
+repo_root="$PWD"
+bin_dir="$HOME/bin"
+mkdir -p "$bin_dir"
+
+export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo_home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}"
+mkdir -p "$CARGO_HOME"
+mkdir -p "$CARGO_TARGET_DIR"
+
+cargo build --manifest-path "$repo_root/cli/trail/Cargo.toml" --release
+cp "$CARGO_TARGET_DIR/release/trail" "$bin_dir/trail"
+chmod 755 "$bin_dir/trail"
+echo "Installed trail to $bin_dir/trail"
+"""
+description = "Build the Trail CLI and install it to ~/bin/trail."
+
+[[tasks]]
 name = "km"
 command = """
 set -euo pipefail
