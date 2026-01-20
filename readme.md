@@ -1,12 +1,10 @@
 # Rust
 
-## Setup
+## Dev 
 
-Using [flow](https://github.com/nikivdev/flow), run `f setup`.
+With [flow](https://github.com/nikivdev/flow), run `f setup`, then `f` will fuzzy search through list of tasks.
 
-## Tasks
-
-Search through all available tasks by running `f`.
+There are lots of CLIs here, running `f deploy-` will compile and put new version of them into your path.
 
 ## Contributing
 
